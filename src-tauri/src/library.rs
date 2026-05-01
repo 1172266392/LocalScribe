@@ -20,13 +20,13 @@ use std::path::{Path, PathBuf};
 
 const LIBRARY_DIR_NAME: &str = "transcripts";
 
-/// Resolve the project root (LocalScribe/).
+/// Resolve a development-time project root (LocalScribe source tree).
 ///
-/// Identifies the root by the presence of `package.json` + `scribe-py/` —
-/// works for `tauri dev` (cwd is `src-tauri/`) and for a packaged `.app`
-/// (current_exe is in `/Applications/...`). Falls back to a hardcoded path
-/// for the personal-use build.
-pub fn project_root() -> PathBuf {
+/// Returns `Some` when we can find a tree containing both `package.json` and
+/// `scribe-py/`. Returns `None` when running from a bundled `.app` — callers
+/// must use `user_data_root()` for writable data and `crate::bundle_resources_dir()`
+/// for embedded resources.
+pub fn dev_project_root() -> Option<PathBuf> {
     fn looks_ok(p: &Path) -> bool {
         p.join("package.json").exists() && p.join("scribe-py").exists()
     }
@@ -34,28 +34,60 @@ pub fn project_root() -> PathBuf {
     if let Ok(env) = std::env::var("LOCALSCRIBE_DEV_ROOT") {
         let r = PathBuf::from(env);
         if looks_ok(&r) {
-            return r;
+            return Some(r);
         }
     }
     if let Ok(exe) = std::env::current_exe() {
         let mut cur: Option<&Path> = exe.parent();
         while let Some(p) = cur {
             if looks_ok(p) {
-                return p.to_path_buf();
+                return Some(p.to_path_buf());
             }
             cur = p.parent();
         }
     }
     if let Some(parent) = std::env::current_dir().ok().and_then(|c| c.parent().map(|p| p.to_path_buf())) {
         if looks_ok(&parent) {
-            return parent;
+            return Some(parent);
         }
     }
-    PathBuf::from("/Users/apple/gitCommit/SwarmPathAI/LocalScribe")
+    None
+}
+
+/// Writable user-data root.
+///
+/// - **Bundled `.app`** → `~/Library/Application Support/LocalScribe/`
+///   (per macOS conventions; survives app upgrades/reinstalls)
+/// - **Dev**            → source tree root (so editing the code keeps your
+///   articles + transcripts visible inside `LocalScribe/`)
+/// - **Fallback**       → cwd (last resort)
+pub fn user_data_root() -> PathBuf {
+    if crate::bundle_resources_dir().is_some() {
+        if let Some(home) = dirs::home_dir() {
+            let p = home.join("Library/Application Support/LocalScribe");
+            let _ = std::fs::create_dir_all(&p);
+            return p;
+        }
+    }
+    if let Some(dev) = dev_project_root() {
+        return dev;
+    }
+    if let Some(home) = dirs::home_dir() {
+        let p = home.join("Library/Application Support/LocalScribe");
+        let _ = std::fs::create_dir_all(&p);
+        return p;
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Backwards-compat alias retained for callers that need the LocalScribe folder.
+/// Equivalent to `user_data_root()`.
+pub fn project_root() -> PathBuf {
+    user_data_root()
 }
 
 pub fn library_root() -> PathBuf {
-    project_root().join(LIBRARY_DIR_NAME)
+    user_data_root().join(LIBRARY_DIR_NAME)
 }
 
 fn task_dir(stem: &str) -> PathBuf {

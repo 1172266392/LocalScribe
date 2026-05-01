@@ -1,6 +1,6 @@
 [package]
 name = "localscribe"
-version = "0.1.0"
+version = "1.0.0"
 description = "LocalScribe — offline audio transcription with optional LLM correction"
 authors = ["LocalScribe contributors"]
 license = "MIT"

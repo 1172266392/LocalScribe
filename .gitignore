@@ -63,6 +63,9 @@ articles/
 # Whisper 模型(1.5 GB,通过 install.sh 下载或单独下载放进 models/)
 models/
 
+# .app 打包前的 staging 目录(~3 GB · 含可重定位 Python + 模型 + ffmpeg)
+src-tauri/bundle-staging/
+
 # 测试 / 演示音频文件(大、可能含个人内容)
 *.m4a
 *.mp3

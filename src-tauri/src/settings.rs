@@ -76,10 +76,10 @@ impl Default for CorrectionSettings {
             base_url: "https://api.deepseek.com".into(),
             model: "deepseek-v4-flash".into(),
             mode: "medium".into(),
-            batch_size: 20,
+            batch_size: 30,
             context_hint: String::new(),
             use_glossary: true,
-            concurrency: 5,
+            concurrency: 15,
             advanced: LLMAdvanced {
                 temperature: 0.1,
                 max_tokens: 8192,
@@ -125,8 +125,34 @@ pub fn load(path: &Path) -> Result<Settings> {
     }
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("read settings: {}", path.display()))?;
-    let s: Settings = serde_json::from_str(&raw).with_context(|| "parse settings.json")?;
+    let mut s: Settings = serde_json::from_str(&raw).with_context(|| "parse settings.json")?;
+    let migrated = migrate(&mut s);
+    if migrated {
+        // 把迁移结果写回磁盘,下次启动直接读新值
+        if let Err(e) = save(path, &s) {
+            tracing::warn!("settings migration save failed: {e:#}");
+        } else {
+            tracing::info!("settings migrated to new defaults (concurrency/batch_size)");
+        }
+    }
     Ok(s)
+}
+
+/// 老版本默认值 → 新版本默认值的迁移。返回是否实际改了。
+///
+/// 仅在用户保留**旧默认值**时才迁移 — 如果用户曾手动改过(比如 concurrency=10),
+/// 不动他的选择。
+fn migrate(s: &mut Settings) -> bool {
+    let mut changed = false;
+    if s.correction.concurrency == 5 {
+        s.correction.concurrency = 15;
+        changed = true;
+    }
+    if s.correction.batch_size == 20 {
+        s.correction.batch_size = 30;
+        changed = true;
+    }
+    changed
 }
 
 pub fn save(path: &Path, settings: &Settings) -> Result<()> {

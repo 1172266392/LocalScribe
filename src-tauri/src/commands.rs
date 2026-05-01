@@ -223,6 +223,51 @@ pub fn check_model_cache(model_id: String) -> Result<model_check::ModelStatus, S
     model_check::check(&model_id).map_err(|e| format!("{e:#}"))
 }
 
+#[tauri::command]
+pub fn reveal_models_dir(model_id: Option<String>) -> Result<String, String> {
+    let id = model_id.unwrap_or_else(|| "mlx-community/whisper-large-v3-turbo".to_string());
+    let dir = model_check::project_models_dir(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}: {e}", dir.display()))?;
+    let path = dir.to_string_lossy().into_owned();
+    // open in Finder (macOS) / Explorer (win) / xdg (linux)
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(&path).spawn()
+            .map_err(|e| format!("open 失败: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer").arg(&path).spawn()
+            .map_err(|e| format!("explorer 失败: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(&path).spawn()
+            .map_err(|e| format!("xdg-open 失败: {e}"))?;
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("仅允许 http(s) URL".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    let prog = "open";
+    #[cfg(target_os = "windows")]
+    let prog = "cmd";
+    #[cfg(target_os = "linux")]
+    let prog = "xdg-open";
+    let mut cmd = std::process::Command::new(prog);
+    #[cfg(target_os = "windows")]
+    cmd.args(["/C", "start", "", &url]);
+    #[cfg(not(target_os = "windows"))]
+    cmd.arg(&url);
+    cmd.spawn().map_err(|e| format!("启动浏览器失败: {e}"))?;
+    Ok(())
+}
+
 // ---- library (auto-saved transcripts) ----
 
 #[tauri::command]

@@ -47,6 +47,9 @@ export type ModelStatus = {
   model_id: string;
   exists: boolean;
   path: string | null;
+  source?: "env" | "project" | "hf_cache" | null;
+  /** 推荐用户放置文件的目标路径(LocalScribe/models/<basename>/) */
+  expected_local_path?: string | null;
 };
 
 export type ProbeAudioInfo = {
@@ -186,6 +189,9 @@ export const ipc = {
 
   // model cache
   checkModelCache: (model_id: string) => invoke<ModelStatus>("check_model_cache", { model_id }),
+  revealModelsDir: (model_id?: string) =>
+    invoke<string>("reveal_models_dir", model_id ? { model_id } : {}),
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
 
   // library
   librarySaveRaw: (args: {

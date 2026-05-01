@@ -18,6 +18,7 @@ import {
 } from "./components/Icons";
 import LibraryPanel from "./components/LibraryPanel";
 import Logo from "./components/Logo";
+import ModelMissingScreen from "./components/ModelMissingScreen";
 import ResultTabs from "./components/ResultTabs";
 import SettingsDialog from "./components/SettingsDialog";
 import TaskQueue from "./components/TaskQueue";
@@ -182,13 +183,15 @@ export default function App() {
               后端未连接: <span className="font-mono">{bootError}</span>
             </div>
           )}
-          {modelStatus && !modelStatus.exists && (
-            <div className="px-3 py-2 text-ui-sm text-warn bg-warn/10 border-b border-border/60">
-              ⚠ 模型 <span className="font-mono">{modelStatus.model_id}</span> 未在缓存
-            </div>
-          )}
-
-          {activeArticle ? (
+          {modelStatus && !modelStatus.exists ? (
+            <ModelMissingScreen
+              status={modelStatus}
+              onRecheck={async () => {
+                const m = await ipc.checkModel({ backend: "auto" });
+                setModelStatus(m);
+              }}
+            />
+          ) : activeArticle ? (
             <ArticleViewer
               meta={activeArticle}
               onClose={() => setActiveArticle(null)}
@@ -239,7 +242,7 @@ function TitleBar({ onOpenSettings }: { onOpenSettings: () => void }) {
       <div className="flex items-center gap-2">
         <Logo size={18} />
         <span className="text-ui font-medium">LocalScribe</span>
-        <span className="text-ui-sm text-fg-mute">v0.1.0</span>
+        <span className="text-ui-sm text-fg-mute">v1.0.0</span>
       </div>
       <button onClick={onOpenSettings} className="btn-ghost h-7 px-2" title="设置">
         <SettingsIcon size={14} />

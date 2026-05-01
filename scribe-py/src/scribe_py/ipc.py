@@ -22,6 +22,7 @@ Progress notification (no id, server → client only):
 from __future__ import annotations
 
 import json
+import os
 import queue
 import sys
 import threading
@@ -61,15 +62,74 @@ def _make_progress(method: str):
 # ---- method handlers ----
 
 def handle_check_model(params: dict) -> dict:
+    """检查模型是否就绪。
+
+    解析顺序与 transcriber_mlx._resolve_model_path 保持一致:
+      1. LOCALSCRIBE_MODEL_DIR (环境变量)
+      2. <project_root>/models/<basename>/weights.safetensors
+      3. HF cache: ~/.cache/huggingface/hub/models--<org>--<name>/
+    返回字段额外暴露 `expected_local_path`,供前端引导用户放置文件。
+    """
     backend = params.get("backend", "auto")
     model_id = params.get("model_id") or default_model_id(backend)
+    basename = model_id.rsplit("/", 1)[-1]
+
+    # ---- 0. 打包后的 .app 资源目录 (Rust 注入 LOCALSCRIBE_RESOURCES) ----
+    res = os.environ.get("LOCALSCRIBE_RESOURCES")
+    if res:
+        bundled = Path(res) / "models" / basename
+        if (bundled / "weights.safetensors").exists():
+            return {
+                "backend": backend, "model_id": model_id,
+                "exists": True, "source": "bundle",
+                "path": str(bundled),
+                "expected_local_path": str(bundled),
+            }
+
+    # ---- 1. 环境变量 ----
+    env_dir = os.environ.get("LOCALSCRIBE_MODEL_DIR")
+    if env_dir:
+        p = Path(env_dir).expanduser()
+        candidate = p if (p / "weights.safetensors").exists() else (p / basename)
+        if (candidate / "weights.safetensors").exists():
+            return {
+                "backend": backend, "model_id": model_id,
+                "exists": True, "source": "env",
+                "path": str(candidate),
+                "expected_local_path": str(candidate),
+            }
+
+    # ---- 2. 项目内 models/ (dev 模式) ----
+    here = Path(__file__).resolve()
+    project_models = None
+    for ancestor in here.parents:
+        if (ancestor / "scribe-py").is_dir() and (ancestor / "package.json").is_file():
+            project_models = ancestor / "models" / basename
+            break
+    if project_models and (project_models / "weights.safetensors").exists():
+        return {
+            "backend": backend, "model_id": model_id,
+            "exists": True, "source": "project",
+            "path": str(project_models),
+            "expected_local_path": str(project_models),
+        }
+
+    # ---- 3. HF cache ----
     repo_dir = model_id.replace("/", "--")
     cache_dir = Path.home() / ".cache" / "huggingface" / "hub" / f"models--{repo_dir}"
+    if cache_dir.exists():
+        return {
+            "backend": backend, "model_id": model_id,
+            "exists": True, "source": "hf_cache",
+            "path": str(cache_dir),
+            "expected_local_path": str(project_models) if project_models else None,
+        }
+
     return {
-        "backend": backend,
-        "model_id": model_id,
-        "exists": cache_dir.exists(),
-        "path": str(cache_dir) if cache_dir.exists() else None,
+        "backend": backend, "model_id": model_id,
+        "exists": False, "source": None,
+        "path": None,
+        "expected_local_path": str(project_models) if project_models else None,
     }
 
 
@@ -117,14 +177,14 @@ def handle_correct(params: dict) -> dict:
         base_url=params.get("base_url", "https://api.deepseek.com"),
         model=params.get("model", "deepseek-v4-flash"),
         mode=params.get("mode", "medium"),
-        batch_size=int(params.get("batch_size", 20)),
+        batch_size=int(params.get("batch_size", 30)),
         temperature=float(params.get("temperature", 0.1)),
         max_tokens=int(params.get("max_tokens", 8192)),
         top_p=float(params.get("top_p", 1.0)),
         frequency_penalty=float(params.get("frequency_penalty", 0.0)),
         presence_penalty=float(params.get("presence_penalty", 0.0)),
         use_glossary=bool(params.get("use_glossary", True)),
-        concurrency=int(params.get("concurrency", 5)),
+        concurrency=int(params.get("concurrency", 15)),
     )
     out = corrector.correct(
         segments,

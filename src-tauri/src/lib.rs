@@ -13,50 +13,81 @@ pub mod secrets;
 pub mod settings;
 pub mod sidecar;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::sidecar::SidecarLazy;
 
+/// Detect whether we're running from a bundled `.app/Contents/MacOS/<binary>`.
+/// Returns `Some(Resources_dir)` if yes.
+pub fn bundle_resources_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let macos_dir = exe.parent()?;          // .../Contents/MacOS
+    let contents = macos_dir.parent()?;     // .../Contents
+    if macos_dir.file_name()? != "MacOS" || contents.file_name()? != "Contents" {
+        return None;
+    }
+    let resources = contents.join("Resources");
+    if resources.is_dir() {
+        Some(resources)
+    } else {
+        None
+    }
+}
+
 /// Locate the Python interpreter and the scribe-py package directory.
 ///
 /// Resolution order (first match wins):
-///   1. `LOCALSCRIBE_DEV_ROOT` env var override
-///   2. cwd's parent (works for `cargo run` / `tauri dev`)
-///   3. exe's ancestors (works for some run modes)
-///   4. Hardcoded absolute path — for personal-use packaged `.app` on this machine.
-///      Replace with PyInstaller-bundled sidecar in the distributable build.
-fn dev_python_paths() -> (PathBuf, PathBuf) {
-    fn looks_ok(root: &std::path::Path) -> bool {
+///   1. **Bundled mode** — `Resources/python/bin/python3` + `Resources/scribe-py/`
+///   2. `LOCALSCRIBE_DEV_ROOT` env var override
+///   3. cwd's parent (works for `cargo run` / `tauri dev`)
+///   4. exe's ancestors
+///   5. Hardcoded fallback for dev convenience
+fn resolve_python_paths() -> (PathBuf, PathBuf, Option<PathBuf>) {
+    fn dev_ok(root: &Path) -> bool {
         root.join(".venv/bin/python3").exists() && root.join("scribe-py").exists()
     }
 
+    // 1. Bundled .app
+    if let Some(resources) = bundle_resources_dir() {
+        let python = resources.join("python/bin/python3");
+        let scribe = resources.join("scribe-py");
+        if python.exists() && scribe.exists() {
+            tracing::info!("running in bundled mode (Resources={})", resources.display());
+            return (python, scribe, Some(resources));
+        }
+        tracing::warn!(
+            "bundle Resources/ exists but python or scribe-py missing — falling back to dev mode"
+        );
+    }
+
+    // 2. dev override
     if let Ok(p) = std::env::var("LOCALSCRIBE_DEV_ROOT") {
         let r = PathBuf::from(p);
-        if looks_ok(&r) {
-            return (r.join(".venv/bin/python3"), r.join("scribe-py"));
+        if dev_ok(&r) {
+            return (r.join(".venv/bin/python3"), r.join("scribe-py"), None);
         }
     }
-
+    // 3. cwd parent
     if let Some(p) = std::env::current_dir().ok().and_then(|c| c.parent().map(|p| p.to_path_buf())) {
-        if looks_ok(&p) {
-            return (p.join(".venv/bin/python3"), p.join("scribe-py"));
+        if dev_ok(&p) {
+            return (p.join(".venv/bin/python3"), p.join("scribe-py"), None);
         }
     }
-
+    // 4. exe ancestors
     if let Ok(exe) = std::env::current_exe() {
         let mut cur = exe.parent();
         while let Some(p) = cur {
-            if looks_ok(p) {
-                return (p.join(".venv/bin/python3"), p.join("scribe-py"));
+            if dev_ok(p) {
+                return (p.join(".venv/bin/python3"), p.join("scribe-py"), None);
             }
             cur = p.parent();
         }
     }
-
+    // 5. dev hardcoded
     let hard = PathBuf::from("/Users/apple/gitCommit/SwarmPathAI/LocalScribe");
-    (hard.join(".venv/bin/python3"), hard.join("scribe-py"))
+    (hard.join(".venv/bin/python3"), hard.join("scribe-py"), None)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -71,9 +102,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // Construct the lazy sidecar holder *synchronously* — no child process spawn here.
             let app_handle = app.handle().clone();
-            let (python, scribe_py_dir) = dev_python_paths();
+            let (python, scribe_py_dir, resources) = resolve_python_paths();
+
+            // If bundled, prepend Resources/bin to PATH so Python sees ffmpeg etc.
+            if let Some(res) = resources.as_ref() {
+                let bin = res.join("bin");
+                if bin.is_dir() {
+                    let cur = std::env::var("PATH").unwrap_or_default();
+                    let new = format!("{}:{}", bin.display(), cur);
+                    std::env::set_var("PATH", &new);
+                    tracing::info!("PATH prepended with bundled bin: {}", bin.display());
+                }
+                std::env::set_var("LOCALSCRIBE_RESOURCES", res);
+            }
+
             tracing::info!(
                 "registering lazy sidecar (python={}, scribe_py_dir={})",
                 python.display(),
@@ -99,6 +142,8 @@ pub fn run() {
             commands::load_settings,
             commands::save_settings,
             commands::check_model_cache,
+            commands::reveal_models_dir,
+            commands::open_url,
             commands::library_save_raw,
             commands::library_save_corrected,
             commands::library_save_polished,

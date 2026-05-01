@@ -3,35 +3,72 @@
 > 完全离线的录音转文字桌面应用 · 可选 LLM 字级校对与整篇排版 · MIT License
 > **出品方:涌智星河(SwarmPath) · 寒三修** — 隐私友好、本地可控、AI 增强的内容创作工具家族
 
+[![Version](https://img.shields.io/badge/version-1.0.0-success)]()
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-blue)]()
 [![Tauri](https://img.shields.io/badge/Tauri-2.10-orange)]()
 [![Whisper](https://img.shields.io/badge/Whisper-large--v3--turbo-purple)]()
+[![DMG](https://img.shields.io/badge/dmg-1.8%20GB-lightgrey)]()
 
 录音文件拖进去,几分钟后得到结构化的文字稿、字幕(SRT)、整篇排版文章。
 **音频不上传任何服务器**;只有在你显式启用 LLM 校对时,转录后的文字才会发送到你配置的 LLM API。
 
 ---
 
+## 🎉 v1.0.0 · 首个正式版
+
+| 类别 | 改进 |
+|---|---|
+| 🚀 **可分发** | 自包含 .dmg(~1.8 GB · 内置 Python 3.12 + 模型 + ffmpeg)— 双击装到 Applications,**用户什么都不用装** |
+| 🎯 **不丢段** | VAD 引导转录:silero-vad 先切说话区间再逐段送 Whisper,解决长 chunk 漏段 bug |
+| ⚡ **更快校对** | 默认并发 5 → **15**,批大小 20 → **30**,综合 4-5x 加速;**急速模式**再快 30% |
+| 📁 **数据规范** | 用户数据搬到 `~/Library/Application Support/LocalScribe/`,卸载/升级不丢 |
+| 🛡️ **首启引导** | 模型缺失时显示三步引导页(下载 → 放指定目录 → 重新检测) |
+| 🏗️ **构建系统** | 新 `build-bundle.sh` + `build-app.sh`,一行命令出可分发 .dmg |
+
+老用户升级:settings 自动迁移到新默认值 — 启动时检测旧 5/20 默认 → 自动改 15/30 并写回。
+
+---
+
 ## ✨ 特性
 
 - **快**:Apple Silicon 经 mlx-whisper 加速,1 小时音频约 1-2 分钟
+- **不丢段**:VAD 引导转录,silero-vad 先切说话区间再逐段送 Whisper,避开 Whisper 长 chunk 漏段 bug
 - **准**:四层防御消除 Whisper 已知的"感谢观看 / Fro Fro" 等中文幻觉
 - **离线**:转录环节零网络。LLM 校对可选,默认关闭
 - **省**:DeepSeek-v4-flash 校对 1 小时音频 ~0.5 元
-- **专业**:VSCode 风格界面 · 5 路并发校对 · 暂停/继续/取消 · 支持 384K token 输出
+- **专业**:VSCode 风格界面 · **15 路并发校对**(默认)· 急速模式开关 · 暂停/继续/取消 · 支持 384K token 输出
 - **历史库**:自动持久化所有转录到 `transcripts/<文件名>/`,以后随时载入查看
 - **CLI 友好**:全部功能可通过命令行 + JSON 协议给 AI 编码工具(Claude Code / Hermes)调用
+- **开箱即用**:提供自包含 `.dmg`(~1.8 GB · 内置 Python + 模型 + ffmpeg),双击装到 Applications 即用
 
 ---
 
 ## 📥 安装
 
-### 推荐:一键脚本(macOS Apple Silicon)
+### 路线 A · 直接装 .dmg(推荐普通用户)
+
+如果作者/朋友给了你 `LocalScribe_1.0.0_aarch64.dmg`(~1.8 GB):
+
+```
+1. 双击 LocalScribe_1.0.0_aarch64.dmg
+2. 拖 LocalScribe 图标到 Applications 文件夹
+3. 启动台 / Finder 找到 LocalScribe → 右键打开(首次会问"未验证开发者")
+4. 直接用 — Python / Whisper 模型 / ffmpeg 全部内置,**不用装任何东西**
+```
+
+DMG 包含:
+- **可重定位 Python 3.12** + mlx-whisper / silero-vad / openai 等所有依赖
+- **Whisper large-v3-turbo** 权重(1.5 GB)
+- **ffmpeg / ffprobe** 静态二进制(arm64)
+
+用户数据(转录、文章库、设置)自动放到 `~/Library/Application Support/LocalScribe/`,卸载/升级不丢。
+
+### 路线 B · 源码自构建(开发者)
 
 ```bash
 git clone <仓库地址> LocalScribe
 cd LocalScribe
-./install.sh           # 自动:装 ffmpeg/uv/pnpm/Rust → 装 Python 依赖 → 下模型(1.5 GB)→ 构建 .app
+./install.sh           # 自动:装 ffmpeg/uv/pnpm/Rust → 装 Python 依赖 → 下模型 → 构建 dev .app
 ```
 
 **国内网络加速**:
@@ -44,7 +81,21 @@ HF_MIRROR=1 ./install.sh    # 用 hf-mirror.com + 清华源 + npmmirror
 SKIP_BUILD=1 ./install.sh   # 用源码 dev 模式跑:pnpm tauri dev
 ```
 
-完成后 `.app` 在 `src-tauri/target/release/bundle/macos/LocalScribe.app`,可拖到 `/Applications/`。
+dev .app 出在 `src-tauri/target/release/bundle/macos/LocalScribe.app`(依赖项目源码,不便分发)。
+
+### 路线 C · 自己出可分发 .dmg
+
+```bash
+./install.sh                       # 先把 .venv + 模型准备好
+./build-app.sh                     # 自动:下 python-build-standalone + ffmpeg → 注入 .app → 出 .dmg
+# 产物: src-tauri/target/release/bundle/dmg/LocalScribe_1.0.0_aarch64.dmg (~1.8 GB)
+```
+
+`build-app.sh` 做的事:
+1. `build-bundle.sh` 准备 staging:可重定位 Python + 装依赖 + ffmpeg + 模型
+2. `pnpm tauri build` 出基础 .app
+3. `tar` 管道把 staging 注入 `.app/Contents/Resources/`(剥离 `com.apple.provenance` xattr,绕开 macOS Tahoe 的 .app 写保护)
+4. `hdiutil` 重新生成 UDZO 压缩 .dmg
 
 ### 配置 DeepSeek API Key(可选,启用 LLM 校对/排版)
 
@@ -158,13 +209,13 @@ pnpm tauri dev
 # 6. 生产构建
 pnpm tauri build
 # 产物:src-tauri/target/release/bundle/macos/LocalScribe.app
-#       src-tauri/target/release/bundle/dmg/LocalScribe_0.1.0_aarch64.dmg
+#       src-tauri/target/release/bundle/dmg/LocalScribe_1.0.0_aarch64.dmg
 ```
 
 ### 注意事项
 
-- 当前 build 是**个人本机版**:.app 依赖 `<repo>/.venv/bin/python3` 绝对路径,不能直接分发给别人
-- 真要做可分发版需要 PyInstaller 把 sidecar 打成单 binary(见路线图)
+- `pnpm tauri build` 出的是 **dev 版 .app** — 依赖 `<repo>/.venv/bin/python3` 绝对路径,只能你这台机器运行
+- 想给别人用:跑 `./build-app.sh` 出**自包含 .dmg**(~1.8 GB,内置 Python + 模型 + ffmpeg)
 
 ---
 
@@ -175,6 +226,9 @@ LocalScribe/
 ├── README.md                    本文档
 ├── CLI.md                       AI 工具调用 CLI 接口
 ├── PROJECT_BRIEF.md             项目需求文档
+├── install.sh                   开发环境一键安装 · 装依赖 + 下模型 + dev build
+├── build-bundle.sh              准备 staging:可重定位 Python + 装依赖 + ffmpeg + 模型
+├── build-app.sh                 出自包含 .dmg(staging 注入 .app + 重打 dmg)
 ├── package.json                 前端依赖
 ├── tailwind.config.cjs          VSCode dark+ 配色
 ├── index.html                   Vite 入口
@@ -214,13 +268,29 @@ LocalScribe/
 │       └── polishers/
 │           └── article_polisher.py   整篇排版
 │
-└── transcripts/                 自动保存的转录结果(每个音频一个子目录)
+├── models/                     Whisper 权重(gitignored,1.5 GB · install.sh 自动下载)
+│   └── whisper-large-v3-turbo/
+│       ├── weights.safetensors
+│       └── config.json
+│
+├── src-tauri/bundle-staging/   .dmg 打包暂存区(gitignored,~3 GB)
+│   ├── python/                 python-build-standalone + 装好的 site-packages
+│   ├── scribe-py/              我们的 Python 包(打包模式用 site-packages 副本)
+│   ├── models/                 模型副本
+│   └── bin/ffmpeg + ffprobe    静态二进制
+│
+└── transcripts/                自动保存的转录结果(每个音频一个子目录)
     ├── <stem1>/
     │   ├── <stem1>.txt / .srt / .json     转录原文
     │   ├── <stem1>_corrected.txt / ...     LLM 校对后
     │   ├── <stem1>_diff.txt                修改对比
     │   └── <stem1>_完整版.txt              整篇排版稿
     └── <stem2>-20260501-1610/              旧版本归档
+
+# 装到 .app 后,用户数据搬到这里(macOS 标准位置):
+~/Library/Application Support/LocalScribe/
+    ├── transcripts/
+    └── articles/
 ```
 
 ---
@@ -255,9 +325,23 @@ Whisper 在静音段会"幻觉"出训练集高频短语(感谢观看 / 请订阅
 ### LLM 校对优化
 
 - **B 两阶段**:Pass 1 扫全文提取专有名词术语表 → Pass 2 每批校对带词表保持跨段一致性
-- **5 路并发**:`ThreadPoolExecutor` 5 倍速,3 小时音频 ~10 分钟 → ~2 分钟
+- **15 路并发**(默认 · 可调):`ThreadPoolExecutor` + DeepSeek API,3 小时音频 ~6 分钟 → ~1.5 分钟
+- **急速模式**:跳过 Pass 1 术语提取,通用内容再快约 30%(设置 → 校对 → 急速模式)
 - **暂停/继续/取消**:reader 线程 + worker 池架构,校对中也能实时响应控制命令
 - **失败隔离**:某批失败保留原文,不让一个错误拖垮整篇
+
+### VAD 引导转录(解决 Whisper 漏段)
+
+Whisper 处理 30 秒以上连续片段时,内部 chunk 决策有时会**整窗丢段** — 同一段音频
+单独切出来送给 Whisper 能识别,放在长音频里又会被跳过。修复方式:
+
+1. `silero-vad` 先扫整段音频 → 输出说话区间时间戳
+2. 合并间隔 < 0.6 秒的相邻区间(避免短片段上下文不足)
+3. 拆开 > 25 秒的(避开 Whisper chunk 边界)
+4. 每个区间单独 ffmpeg 切片 + mlx-whisper 转录,最后按全局时间拼接
+
+实测:之前会丢的"经文 1-3 节"现在完整出现。代价 RTF 约 0.04 → 0.06(仍远低于实时)。
+默认开启,环境变量 `LOCALSCRIBE_VAD_GUIDED=0` 可关。
 
 ### 截断检测
 
@@ -272,12 +356,15 @@ LLM 输出有 token 限制,超长内容会被截断。我们:
 
 - [x] MLX + faster-whisper 双后端
 - [x] LLM 校对 + 排版
-- [x] 5 路并发 + 暂停/取消
 - [x] 历史库 + 重复检测
 - [x] 4 层幻觉防御
 - [x] CLI + JSON 协议
-- [ ] **可分发版**(PyInstaller 打 sidecar)— 让别人不需要 .venv 也能用
-- [ ] **首启 wizard**(模型下载 + ffmpeg 检测引导)
+- [x] **15 路并发**校对 + 暂停/取消 + 急速模式
+- [x] **VAD 引导转录** — 解决 Whisper 长 chunk 漏段
+- [x] **可分发 .dmg**(~1.8 GB · 内置 Python + 模型 + ffmpeg)— 双击装到 Applications 即用
+- [x] **模型缺失引导页** — 启动时若没找到权重,UI 引导用户放入正确目录
+- [ ] **代码签名 + 公证**(Apple Dev ID · 消除"未验证开发者"提示)
+- [ ] **首启 wizard**(语言 / 模型大小 / 镜像三步引导)
 - [ ] **Windows / Linux 构建**
 - [ ] **Live recording**(直接调系统麦克风)
 - [ ] **说话人分离**(diarization · `pyannote.audio`)

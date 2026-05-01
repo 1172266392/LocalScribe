@@ -14,10 +14,10 @@ const DEFAULT_SETTINGS: AppSettings = {
     base_url: "https://api.deepseek.com",
     model: "deepseek-v4-flash",
     mode: "medium",
-    batch_size: 20,
+    batch_size: 30,
     context_hint: "",
     use_glossary: true,
-    concurrency: 5,
+    concurrency: 15,
     advanced: {
       temperature: 0.1,
       max_tokens: 8192,

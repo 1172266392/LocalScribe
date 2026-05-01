@@ -34,7 +34,7 @@ class OpenAICompatibleCorrector(Corrector):
         base_url: str = "https://api.deepseek.com",
         model: str = "deepseek-v4-flash",
         mode: str = "medium",
-        batch_size: int = 20,
+        batch_size: int = 30,
         temperature: float = 0.1,
         max_tokens: int = 8192,
         top_p: float = 1.0,
@@ -42,7 +42,7 @@ class OpenAICompatibleCorrector(Corrector):
         presence_penalty: float = 0.0,
         use_glossary: bool = True,
         glossary_text_cap: int = 200_000,
-        concurrency: int = 5,
+        concurrency: int = 15,
     ):
         if not api_key:
             raise ValueError("api_key is required")

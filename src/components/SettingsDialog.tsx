@@ -284,6 +284,21 @@ function CorrectionTab() {
         </div>
       </Field>
 
+      <Field
+        label="急速模式"
+        hint="跳过术语提取阶段(Pass 1),只跑分批校对。通用内容快约 30%,专业内容(人名/术语多)准确率会略降。"
+      >
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            disabled={!settings.correction.enabled}
+            checked={!settings.correction.use_glossary}
+            onChange={(e) => patchCorrection({ use_glossary: !e.target.checked })}
+          />
+          {!settings.correction.use_glossary ? "已开启(更快)" : "未开启(更准)"}
+        </label>
+      </Field>
+
       <Field label="上下文提示词" hint="可选,告诉模型这段音频的领域">
         <textarea
           className="textarea w-full"
@@ -409,30 +424,32 @@ function AdvancedParamsSection() {
 
             <ParamRow
               label="并发数"
-              hint="同时发起几个 LLM 校对请求。1 = 串行最稳;5 = 推荐(5 倍提速);10+ 注意 API 限流。"
+              hint="同时发起几个 LLM 校对请求。15 = 推荐(适合 DeepSeek);更高需注意 API 限流。"
               min={1}
-              max={20}
+              max={30}
               step={1}
               value={settings.correction.concurrency}
-              recommended={5}
+              recommended={15}
               onChange={(v) => patchCorrection({ concurrency: v })}
             />
             <ParamRow
               label="批大小"
-              hint="校对时每次给 LLM 几段。太大 LLM 容易乱;太小调用次数多。15-30 较合理,默认 20。"
+              hint="校对时每次给 LLM 几段。30 = 推荐;更大 LLM 容易乱,更小调用次数多。"
               min={5}
               max={100}
               step={5}
               value={settings.correction.batch_size}
-              recommended={20}
+              recommended={30}
               onChange={(v) => patchCorrection({ batch_size: v })}
             />
             <div className="flex items-start gap-3">
               <div className="flex-1 min-w-0">
-                <div className="text-sm">启用术语表(B 两阶段)</div>
+                <div className="text-sm">启用术语表(两阶段校对)</div>
                 <div className="text-xs text-text-mute mt-0.5">
                   开始校对前先扫全文提取专有名词,后续每批校对时强制保持一致。
-                  长内容(会议、访谈)建议开启,可让人名/术语跨段统一。
+                  <br />
+                  <strong className="text-fg">关闭 = 急速模式</strong>:跳过术语提取,通用内容速度提升约 30%,
+                  专业内容(术语多/人名多)准确率会略降。
                 </div>
               </div>
               <label className="inline-flex items-center gap-2 pt-1.5 text-sm">
@@ -441,7 +458,7 @@ function AdvancedParamsSection() {
                   checked={settings.correction.use_glossary}
                   onChange={(e) => patchCorrection({ use_glossary: e.target.checked })}
                 />
-                {settings.correction.use_glossary ? "开" : "关"}
+                {settings.correction.use_glossary ? "开" : "急速模式"}
               </label>
             </div>
           </fieldset>
@@ -557,7 +574,7 @@ function AboutTab() {
   return (
     <div className="space-y-4 text-ui">
       <div>
-        <div className="text-ui-lg font-medium text-fg">LocalScribe v0.1.0</div>
+        <div className="text-ui-lg font-medium text-fg">LocalScribe v1.0.0</div>
         <div className="text-ui-sm text-fg-mute mt-0.5">离线录音转文字 · MIT License</div>
       </div>
 

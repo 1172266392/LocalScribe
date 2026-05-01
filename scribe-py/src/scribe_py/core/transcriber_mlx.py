@@ -31,6 +31,13 @@ def _resolve_model_path(model_id: str) -> str:
     """
     basename = model_id.rsplit("/", 1)[-1]
 
+    # 0. 打包后的 .app 资源目录(由 Rust 注入)
+    res = os.environ.get("LOCALSCRIBE_RESOURCES")
+    if res:
+        bundled = Path(res) / "models" / basename
+        if (bundled / "weights.safetensors").exists():
+            return str(bundled)
+
     # 1. 显式环境变量
     env_dir = os.environ.get("LOCALSCRIBE_MODEL_DIR")
     if env_dir:
@@ -347,18 +354,52 @@ class MLXTranscriber(Transcriber):
         options: TranscribeOptions,
         on_progress: ProgressCallback | None,
     ) -> tuple[list[Segment], str | None]:
-        import mlx_whisper
-
         repo = options.model_id or DEFAULT_MODEL
         resolved = _resolve_model_path(repo)
-        # 本地路径已找到 → 不再访问网络;否则保留 mlx-whisper 默认行为
         if resolved != repo:
             os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+        # 优先走 VAD-guided 路径(解决 Whisper 长 chunk 漏段 bug)。
+        # 失败时(silero-vad / soundfile 缺失)自动 fallback 到整段送 Whisper。
+        use_vad = os.environ.get("LOCALSCRIBE_VAD_GUIDED", "1") != "0"
+        if use_vad:
+            try:
+                segments, language = _vad_guided_run(
+                    audio, resolved, options, on_progress
+                )
+                # 仍然过 Layer 3/4 后处理(VAD 已是 Layer 1,这里只跑模式后处理)
+                raw = [
+                    {"start": s.start, "end": s.end, "text": s.text, "avg_logprob": -0.5}
+                    for s in segments
+                ]
+                cleaned, stats = _filter_all_layers(raw, audio)
+                stats["mode"] = "vad_guided"
+                self.last_filter_stats = stats
+                if on_progress:
+                    on_progress({"stage": "post_filter_done", "filter_stats": stats})
+                    on_progress({"current": len(cleaned), "total": len(cleaned), "stage": "done"})
+                return cleaned, language
+            except Exception as e:
+                if on_progress:
+                    on_progress({"stage": "vad_fallback", "reason": str(e)})
+
+        # Fallback / 强制旧路径
+        return self._run_whole(audio, resolved, options, on_progress)
+
+    def _run_whole(
+        self,
+        audio: Path,
+        resolved_model: str,
+        options: TranscribeOptions,
+        on_progress: ProgressCallback | None,
+    ) -> tuple[list[Segment], str | None]:
+        """整段送 Whisper(原始路径,fallback 用)。"""
+        import mlx_whisper
+
         kwargs = {
-            "path_or_hf_repo": resolved,
+            "path_or_hf_repo": resolved_model,
             "language": options.language,
             "word_timestamps": options.word_timestamps,
-            # ---- Layer 2: 解码硬化 ----
             "condition_on_previous_text": False,
             "no_speech_threshold": 0.6,
             "compression_ratio_threshold": 2.4,
@@ -370,17 +411,190 @@ class MLXTranscriber(Transcriber):
         result = mlx_whisper.transcribe(str(audio), **kwargs)
         raw_segments = [s for s in result.get("segments", []) if s.get("text", "").strip()]
 
-        # ---- Layers 1, 3, 4: filter pipeline ----
         if on_progress:
             on_progress({"stage": "post_filter_start", "raw_segments": len(raw_segments)})
         segments, stats = _filter_all_layers(raw_segments, audio)
+        stats["mode"] = "whole"
         self.last_filter_stats = stats
-
         if on_progress:
-            on_progress({
-                "stage": "post_filter_done",
-                "filter_stats": stats,
-            })
+            on_progress({"stage": "post_filter_done", "filter_stats": stats})
             on_progress({"current": len(segments), "total": len(segments), "stage": "done"})
 
         return segments, result.get("language")
+
+
+# ============================================================================
+# VAD-guided transcription
+# ============================================================================
+#
+# Why we need this: Whisper 的内部 chunk 处理在某些情况下会**整窗丢段** —
+# 同一段音频单独切出来送给 Whisper 能正常识别,放在长音频里又会被跳过。
+# 这是 OpenAI Whisper 的已知问题(non-deterministic chunk merging)。
+# 解决: 用 silero-vad 先把音频切成"说话区间",每个区间不超过 25 秒
+# (避开 Whisper 30 秒滑窗),逐段送 mlx-whisper,再把结果按全局时间拼接。
+#
+# 副作用: 短片段(< 3s)上下文不足容易听错(如"雅各书"听成"染歌书"),
+# 所以合并相邻区间到一个相对长的窗口里。
+
+_AUDIO_SR = 16000  # silero-vad / Whisper 标准采样率
+
+
+def _load_audio_16k(path: Path) -> "np.ndarray":  # type: ignore[name-defined]
+    """ffmpeg → 16 kHz mono float32 numpy。"""
+    import subprocess
+    import numpy as np
+
+    proc = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(path), "-ac", "1", "-ar", str(_AUDIO_SR),
+            "-f", "f32le", "-acodec", "pcm_f32le", "-",
+        ],
+        check=True, capture_output=True,
+    )
+    return np.frombuffer(proc.stdout, dtype=np.float32).copy()  # copy → writable
+
+
+def _vad_speech_regions(samples, *, threshold: float = 0.3,
+                        min_speech_ms: int = 250,
+                        min_silence_ms: int = 200,
+                        merge_gap_s: float = 0.6,
+                        max_seg_s: float = 25.0,
+                        min_seg_s: float = 3.0):
+    """返回[(start_sample, end_sample), …]。
+    - 合并间隔 < merge_gap_s 的相邻区间(避免短片段)
+    - 拆开 > max_seg_s 的(避开 Whisper chunk bug)
+    - 过短(< min_seg_s)的区间会向后合并(短片段 Whisper 上下文不足易听错)
+    """
+    import torch
+    from silero_vad import load_silero_vad, get_speech_timestamps
+
+    vad = load_silero_vad()
+    wav_t = torch.from_numpy(samples)
+    raw = get_speech_timestamps(
+        wav_t, vad, sampling_rate=_AUDIO_SR,
+        threshold=threshold,
+        min_speech_duration_ms=min_speech_ms,
+        min_silence_duration_ms=min_silence_ms,
+    )
+    if not raw:
+        return []
+
+    # 合并近邻
+    merged = [dict(raw[0])]
+    for r in raw[1:]:
+        if r["start"] - merged[-1]["end"] < merge_gap_s * _AUDIO_SR:
+            merged[-1]["end"] = r["end"]
+        else:
+            merged.append(dict(r))
+
+    # 短片段向后合(若不能合,保留)
+    consolidated = []
+    i = 0
+    while i < len(merged):
+        cur = merged[i]
+        dur = (cur["end"] - cur["start"]) / _AUDIO_SR
+        # 短的合下一个 — 若合并后总长 ≤ max_seg_s
+        while dur < min_seg_s and i + 1 < len(merged):
+            nxt = merged[i + 1]
+            new_dur = (nxt["end"] - cur["start"]) / _AUDIO_SR
+            if new_dur > max_seg_s:
+                break
+            cur = {"start": cur["start"], "end": nxt["end"]}
+            dur = new_dur
+            i += 1
+        consolidated.append(cur)
+        i += 1
+
+    # 拆超长
+    final = []
+    for r in consolidated:
+        s, e = r["start"], r["end"]
+        dur = (e - s) / _AUDIO_SR
+        if dur <= max_seg_s:
+            final.append((s, e))
+        else:
+            n = int((dur + max_seg_s - 1) // max_seg_s)
+            chunk = (e - s) // n
+            for k in range(n):
+                cs = s + k * chunk
+                ce = e if k == n - 1 else s + (k + 1) * chunk
+                final.append((cs, ce))
+    return final
+
+
+def _vad_guided_run(audio: Path, resolved_model: str, options, on_progress):
+    """VAD 引导转录主流程。"""
+    import os
+    import tempfile
+    import mlx_whisper
+    import soundfile as sf
+
+    samples = _load_audio_16k(audio)
+    duration_s = len(samples) / _AUDIO_SR
+
+    if on_progress:
+        on_progress({"stage": "vad_start", "duration": duration_s})
+
+    regions = _vad_speech_regions(samples)
+    if on_progress:
+        on_progress({"stage": "vad_regions", "count": len(regions)})
+
+    if not regions:
+        # 没检测到说话 — 整段也试一下,可能是 VAD 太严
+        return [], None
+
+    base_kwargs = {
+        "path_or_hf_repo": resolved_model,
+        "language": options.language,
+        "word_timestamps": options.word_timestamps,
+        "condition_on_previous_text": False,
+        "no_speech_threshold": 0.3,  # 已经被 VAD 筛过,这里放宽
+        "compression_ratio_threshold": 2.4,
+        "logprob_threshold": -1.0,
+    }
+    if options.initial_prompt:
+        base_kwargs["initial_prompt"] = options.initial_prompt
+
+    all_segments: list[Segment] = []
+    language: str | None = None
+
+    for idx, (s_samp, e_samp) in enumerate(regions):
+        s_sec = s_samp / _AUDIO_SR
+        e_sec = e_samp / _AUDIO_SR
+        chunk = samples[s_samp:e_samp]
+
+        # 写临时 WAV (mlx-whisper 需要文件路径)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            sf.write(tmp_path, chunk, _AUDIO_SR, subtype="FLOAT")
+            res = mlx_whisper.transcribe(tmp_path, **base_kwargs)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        if language is None:
+            language = res.get("language")
+
+        for seg in res.get("segments", []):
+            txt = (seg.get("text") or "").strip()
+            if not txt:
+                continue
+            all_segments.append(Segment(
+                start=s_sec + float(seg["start"]),
+                end=s_sec + float(seg["end"]),
+                text=txt,
+            ))
+
+        if on_progress:
+            on_progress({
+                "stage": "vad_chunk",
+                "current": idx + 1,
+                "total": len(regions),
+                "preview": txt[:30] if (res.get("segments") and txt) else "",
+            })
+
+    return all_segments, language

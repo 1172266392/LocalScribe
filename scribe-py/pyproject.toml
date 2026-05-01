@@ -1,6 +1,6 @@
 [project]
 name = "scribe-py"
-version = "0.1.0"
+version = "1.0.0"
 description = "LocalScribe Python sidecar — Whisper transcription + LLM correction pipeline"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,6 +12,8 @@ dependencies = [
     "huggingface_hub>=0.24",
     "openai>=1.50",
     "python-dotenv>=1.0",
+    "silero-vad>=5.1",
+    "soundfile>=0.12",
 ]
 
 [project.scripts]
