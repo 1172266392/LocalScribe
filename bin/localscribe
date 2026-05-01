@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# LocalScribe CLI wrapper.
+#
+# Designed for AI coding tools (Claude Code, Hermes, etc.) to drive transcription
+# + correction + polishing as a tool. All subcommands accept --json for
+# machine-readable output on stdout (logs go to stderr).
+#
+# Quick usage:
+#   localscribe pipeline audio.m4a --json     # 一条龙转录 + 校对 + 排版
+#   localscribe transcribe audio.m4a --json   # 仅转录
+#   localscribe ls --json                      # 列历史库
+#
+# Install to PATH:
+#   ln -s "$(pwd)/bin/localscribe" /usr/local/bin/localscribe
+#
+# Required for LLM stages:
+#   export DEEPSEEK_API_KEY=sk-...
+
+set -e
+
+# Resolve repo root by walking up from this script's location.
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VENV_PY="$REPO_ROOT/.venv/bin/python3"
+if [ ! -x "$VENV_PY" ]; then
+  echo "ERROR: venv not found at $VENV_PY" >&2
+  echo "Set up: cd $REPO_ROOT && uv venv && uv pip install --python .venv/bin/python -e scribe-py" >&2
+  exit 127
+fi
+
+exec "$VENV_PY" -m scribe_py "$@"
