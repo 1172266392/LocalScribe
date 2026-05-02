@@ -50,6 +50,33 @@ pub async fn probe_audio(
 }
 
 #[tauri::command]
+pub async fn diarize(
+    sidecar: State<'_, SidecarLazy>,
+    audio: String,
+    segments: Value,
+    n_speakers: Option<u32>,
+    profiles: Option<Value>,
+) -> Result<Value, String> {
+    let params = json!({
+        "audio": audio,
+        "segments": segments,
+        "n_speakers": n_speakers.unwrap_or(2),
+        "profiles": profiles.unwrap_or_else(|| json!([])),
+    });
+    log_cmd!("diarize", "n_speakers={}", n_speakers.unwrap_or(2));
+    map_err(sidecar.call("diarize", params).await)
+}
+
+#[tauri::command]
+pub async fn extract_voice_embedding(
+    sidecar: State<'_, SidecarLazy>,
+    audio: String,
+) -> Result<Value, String> {
+    log_cmd!("extract_voice_embedding", "audio={audio}");
+    map_err(sidecar.call("extract_voice_embedding", json!({ "audio": audio })).await)
+}
+
+#[tauri::command]
 pub async fn transcribe(
     sidecar: State<'_, SidecarLazy>,
     audio: String,

@@ -7,6 +7,23 @@ type Props = {
   emptyHint?: string;
 };
 
+// VSCode-friendly palette for up to 8 speakers (循环复用,够多人会议)
+const SPEAKER_COLORS = [
+  "text-sky-300 border-sky-300/40 bg-sky-500/10",
+  "text-orange-300 border-orange-300/40 bg-orange-500/10",
+  "text-emerald-300 border-emerald-300/40 bg-emerald-500/10",
+  "text-pink-300 border-pink-300/40 bg-pink-500/10",
+  "text-violet-300 border-violet-300/40 bg-violet-500/10",
+  "text-yellow-300 border-yellow-300/40 bg-yellow-500/10",
+  "text-cyan-300 border-cyan-300/40 bg-cyan-500/10",
+  "text-rose-300 border-rose-300/40 bg-rose-500/10",
+];
+
+function speakerClass(speakers: string[], who: string): string {
+  const idx = speakers.indexOf(who);
+  return SPEAKER_COLORS[idx >= 0 ? idx % SPEAKER_COLORS.length : 0];
+}
+
 export default function SegmentList({ segments, showDiff = false, emptyHint }: Props) {
   if (!segments.length) {
     return (
@@ -15,6 +32,13 @@ export default function SegmentList({ segments, showDiff = false, emptyHint }: P
       </div>
     );
   }
+  // 收集所有说话人,按出现顺序固定颜色
+  const speakers: string[] = [];
+  for (const s of segments) {
+    if (s.speaker && !speakers.includes(s.speaker)) speakers.push(s.speaker);
+  }
+  const showSpeakers = speakers.length > 0;
+
   return (
     <ul className="space-y-1.5 font-mono text-sm leading-relaxed">
       {segments.map((s, i) => {
@@ -24,6 +48,17 @@ export default function SegmentList({ segments, showDiff = false, emptyHint }: P
             <span className="text-xs text-text-mute pt-0.5 whitespace-nowrap shrink-0">
               {fmtTs(s.start)}
             </span>
+            {showSpeakers && (
+              <span
+                className={
+                  "shrink-0 px-1.5 py-0.5 rounded-sm border text-xs font-medium whitespace-nowrap " +
+                  (s.speaker ? speakerClass(speakers, s.speaker) : "text-text-mute border-bg-border")
+                }
+                title="说话人"
+              >
+                {s.speaker ?? "?"}
+              </span>
+            )}
             <div className="flex-1 min-w-0">
               {changed && (
                 <div className="text-xs text-red-400/70 line-through truncate">

@@ -8,6 +8,28 @@ export type Segment = {
   end: number;
   text: string;
   original_text?: string;
+  speaker?: string; // 由 diarization 设置
+};
+
+/** 用户登记的"声纹样本"。embedding 为 256 维归一化向量 */
+export type SpeakerProfile = {
+  name: string;
+  embedding: number[];
+  /** 创建时间(ISO),便于 UI 展示 */
+  created_at?: string;
+};
+
+export type DiarizeResponse = {
+  segments: Array<{ start: number; end: number; text: string; speaker: string }>;
+  speakers: string[];
+  matched_profiles: Record<string, string>;
+  stats: {
+    embeddings: number;
+    duration_s: number;
+    clusters: number;
+    matched_profile_count: number;
+    segment_count: number;
+  };
 };
 
 export type FilterStats = {
@@ -119,6 +141,14 @@ export type PolishSettings = {
   advanced: LLMAdvanced;
 };
 
+export type DiarizationSettings = {
+  enabled: boolean;
+  /** 期望的说话人数(KMeans 簇数)。1 = 单人(跳过聚类) */
+  n_speakers: number;
+  /** 注册的声纹样本库 — 自动给真实姓名 */
+  speakers: SpeakerProfile[];
+};
+
 export type AppSettings = {
   model_id: string;
   backend: string;
@@ -127,6 +157,7 @@ export type AppSettings = {
   output_dir: string | null;
   correction: CorrectionSettings;
   polish: PolishSettings;
+  diarization: DiarizationSettings;
 };
 
 // ---- backend bridge ----
@@ -136,6 +167,17 @@ export const ipc = {
   checkModel: (params?: { backend?: string; model_id?: string }) =>
     invoke<ModelStatus>("check_model", params ?? {}),
   probeAudio: (audio: string) => invoke<ProbeAudioInfo>("probe_audio", { audio }),
+  diarize: (params: {
+    audio: string;
+    segments: Segment[];
+    n_speakers?: number;
+    profiles?: SpeakerProfile[];
+  }) => invoke<DiarizeResponse>("diarize", params),
+  extractVoiceEmbedding: (audio: string) =>
+    invoke<{ embedding: number[]; dims: number; audio: string }>(
+      "extract_voice_embedding",
+      { audio },
+    ),
   transcribe: (params: {
     audio: string;
     backend?: string;

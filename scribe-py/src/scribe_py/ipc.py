@@ -50,7 +50,15 @@ def _emit(obj: dict) -> None:
 
 
 def _segments_from_dicts(items: list[dict]) -> list[Segment]:
-    return [Segment(start=float(s["start"]), end=float(s["end"]), text=s["text"]) for s in items]
+    return [
+        Segment(
+            start=float(s["start"]),
+            end=float(s["end"]),
+            text=s["text"],
+            speaker=s.get("speaker") or None,
+        )
+        for s in items
+    ]
 
 
 def _make_progress(method: str):
@@ -253,6 +261,46 @@ def handle_correct_status(_params: dict) -> dict:
     }
 
 
+# ---- diarization ----
+
+def handle_diarize(params: dict) -> dict:
+    """params: { audio: str, segments: [{start,end,text}], n_speakers: int,
+                 profiles: [{name, embedding}] }"""
+    from .diarizers import diarize as _diarize
+    audio = Path(params["audio"])
+    segments = params.get("segments") or []
+    n_speakers = int(params.get("n_speakers", 2))
+    profiles = params.get("profiles") or []
+    result = _diarize(
+        audio=audio,
+        segments=segments,
+        n_speakers=n_speakers,
+        profiles=profiles,
+        on_progress=_make_progress("diarize"),
+    )
+    return {
+        "segments": [
+            {"start": s.start, "end": s.end, "text": s.text, "speaker": s.speaker}
+            for s in result.segments
+        ],
+        "speakers": result.speakers,
+        "matched_profiles": result.matched_profiles,
+        "stats": result.stats,
+    }
+
+
+def handle_extract_voice_embedding(params: dict) -> dict:
+    """params: { audio: str } → { embedding: list[float] (256), name?: str }"""
+    from .diarizers import extract_voice_embedding
+    audio = Path(params["audio"])
+    emb = extract_voice_embedding(audio)
+    return {
+        "embedding": emb,
+        "dims": len(emb),
+        "audio": str(audio),
+    }
+
+
 HANDLERS: dict[str, Any] = {
     "check_model": handle_check_model,
     "probe_audio": handle_probe_audio,
@@ -264,6 +312,8 @@ HANDLERS: dict[str, Any] = {
     "correct_resume": handle_correct_resume,
     "correct_cancel": handle_correct_cancel,
     "correct_status": handle_correct_status,
+    "diarize": handle_diarize,
+    "extract_voice_embedding": handle_extract_voice_embedding,
 }
 
 # Methods that must run on the main thread (so they can interrupt long-running ops).

@@ -157,7 +157,14 @@ export default function App() {
             </div>
           </SidebarSection>
 
-          <SidebarSection title="任务队列" badge={tasks.length || undefined} defaultOpen>
+          <SidebarSection
+            title="任务队列"
+            badge={
+              tasks.filter((t) => !["polished", "corrected", "transcribed"].includes(t.stage)).length
+              || undefined
+            }
+            defaultOpen
+          >
             <TaskQueue />
           </SidebarSection>
 
@@ -242,7 +249,7 @@ function TitleBar({ onOpenSettings }: { onOpenSettings: () => void }) {
       <div className="flex items-center gap-2">
         <Logo size={18} />
         <span className="text-ui font-medium">LocalScribe</span>
-        <span className="text-ui-sm text-fg-mute">v1.0.0</span>
+        <span className="text-ui-sm text-fg-mute">v1.0.1</span>
       </div>
       <button onClick={onOpenSettings} className="btn-ghost h-7 px-2" title="设置">
         <SettingsIcon size={14} />

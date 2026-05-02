@@ -11,11 +11,14 @@ class Segment:
     end: float
     text: str
     original_text: str | None = None
+    speaker: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = {"start": self.start, "end": self.end, "text": self.text}
         if self.original_text is not None and self.original_text != self.text:
             d["original_text"] = self.original_text
+        if self.speaker:
+            d["speaker"] = self.speaker
         return d
 
 

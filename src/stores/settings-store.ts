@@ -26,6 +26,11 @@ const DEFAULT_SETTINGS: AppSettings = {
       presence_penalty: 0.0,
     },
   },
+  diarization: {
+    enabled: false,
+    n_speakers: 0, // 0 = 自动检测
+    speakers: [],
+  },
   polish: {
     enabled: false,
     model: "deepseek-v4-flash",
@@ -48,6 +53,7 @@ type SettingsStore = {
   patch: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => Promise<void>;
   patchCorrection: (patch: Partial<AppSettings["correction"]>) => Promise<void>;
   patchPolish: (patch: Partial<AppSettings["polish"]>) => Promise<void>;
+  patchDiarization: (patch: Partial<AppSettings["diarization"]>) => Promise<void>;
   setApiKey: (provider: string, key: string) => Promise<void>;
   refreshHasApiKey: () => Promise<void>;
 };
@@ -93,6 +99,17 @@ export const useSettings = create<SettingsStore>((set, get) => ({
     const next = {
       ...get().settings,
       polish: { ...get().settings.polish, ...patch },
+    };
+    await ipc.saveSettings(next);
+    set({ settings: next });
+  },
+
+  patchDiarization: async (patch) => {
+    const cur = get().settings.diarization
+      ?? { enabled: false, n_speakers: 2, speakers: [] };
+    const next = {
+      ...get().settings,
+      diarization: { ...cur, ...patch },
     };
     await ipc.saveSettings(next);
     set({ settings: next });

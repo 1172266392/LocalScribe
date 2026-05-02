@@ -124,7 +124,10 @@ class OpenAICompatibleCorrector(Corrector):
         out: list[Segment] = []
         for i, src in enumerate(batch):
             corrected = by_idx.get(i, src.text).strip() or src.text
-            out.append(Segment(start=src.start, end=src.end, text=corrected, original_text=src.text))
+            out.append(Segment(
+                start=src.start, end=src.end, text=corrected,
+                original_text=src.text, speaker=src.speaker,
+            ))
         return out
 
     # ---- Orchestration ----
@@ -161,7 +164,7 @@ class OpenAICompatibleCorrector(Corrector):
                 control.wait_if_paused()
                 if control.is_cancelled():
                     self.last_cancelled = True
-                    return [Segment(s.start, s.end, s.text, s.text) for s in segments]
+                    return [Segment(s.start, s.end, s.text, s.text, speaker=s.speaker) for s in segments]
             glossary = self._extract_glossary(segments, context_hint)
             self.last_glossary = glossary
             if on_progress:
@@ -186,7 +189,8 @@ class OpenAICompatibleCorrector(Corrector):
                 return idx, self._correct_batch(batch, context_hint)
             except Exception:  # noqa: BLE001 — keep going with originals on any failure
                 return idx, [
-                    Segment(s.start, s.end, s.text, original_text=s.text) for s in batch
+                    Segment(s.start, s.end, s.text, original_text=s.text, speaker=s.speaker)
+                    for s in batch
                 ]
 
         # We submit work in a controlled fashion so that pause stops *new* dispatches
@@ -254,7 +258,8 @@ class OpenAICompatibleCorrector(Corrector):
             batch_out = results.get(idx)
             if batch_out is None:
                 batch_out = [
-                    Segment(s.start, s.end, s.text, original_text=s.text) for s in batch
+                    Segment(s.start, s.end, s.text, original_text=s.text, speaker=s.speaker)
+                    for s in batch
                 ]
             out.extend(batch_out)
 

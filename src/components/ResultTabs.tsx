@@ -5,18 +5,66 @@ import clsx from "clsx";
 
 import { buildJson, buildMd, buildSrt, buildTxt, fmtDuration } from "../lib/format";
 import type { Segment } from "../lib/ipc";
+import { ipc } from "../lib/ipc";
 import { useSettings } from "../stores/settings-store";
-import type { Task } from "../stores/tasks-store";
+import { type Task, useTasks } from "../stores/tasks-store";
 import { Article, Check, Copy, Download, FileText, Hourglass, Lock, Pencil, Refresh } from "./Icons";
 import PinArticleDialog from "./PinArticleDialog";
 
 type Tab = "raw" | "corrected" | "article";
+type ViewMode = "timeline" | "dialog";
 
 const TAB_META: Record<Tab, { label: string; icon: React.ReactNode }> = {
   raw: { label: "原文", icon: <FileText size={13} /> },
   corrected: { label: "校对", icon: <Pencil size={13} /> },
   article: { label: "文章", icon: <Article size={13} /> },
 };
+
+// VSCode-friendly palette,8 路循环
+const SPEAKER_PALETTE = [
+  "text-sky-300 border-sky-300/40 bg-sky-500/10",
+  "text-orange-300 border-orange-300/40 bg-orange-500/10",
+  "text-emerald-300 border-emerald-300/40 bg-emerald-500/10",
+  "text-pink-300 border-pink-300/40 bg-pink-500/10",
+  "text-violet-300 border-violet-300/40 bg-violet-500/10",
+  "text-yellow-300 border-yellow-300/40 bg-yellow-500/10",
+  "text-cyan-300 border-cyan-300/40 bg-cyan-500/10",
+  "text-rose-300 border-rose-300/40 bg-rose-500/10",
+];
+
+function collectSpeakers(segments: Segment[]): string[] {
+  const out: string[] = [];
+  for (const s of segments) {
+    if (s.speaker && !out.includes(s.speaker)) out.push(s.speaker);
+  }
+  return out;
+}
+function speakerChipClass(speakers: string[], who: string): string {
+  const idx = speakers.indexOf(who);
+  return SPEAKER_PALETTE[idx >= 0 ? idx % SPEAKER_PALETTE.length : 0];
+}
+
+/** 把连续 ≤ 1.2s 间隔的同一 speaker 段合并成 turn(对话视图用) */
+function groupBySpeakerTurns(segments: Segment[]): Array<{
+  speaker?: string;
+  start: number;
+  end: number;
+  segments: Segment[];
+}> {
+  const turns: Array<{ speaker?: string; start: number; end: number; segments: Segment[] }> = [];
+  for (const s of segments) {
+    const last = turns[turns.length - 1];
+    const sameSpeaker = last && last.speaker === s.speaker;
+    const closeInTime = last && s.start - last.end < 1.2;
+    if (last && sameSpeaker && closeInTime) {
+      last.end = s.end;
+      last.segments.push(s);
+    } else {
+      turns.push({ speaker: s.speaker, start: s.start, end: s.end, segments: [s] });
+    }
+  }
+  return turns;
+}
 
 type Props = {
   task: Task;
@@ -31,6 +79,8 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
   const [tab, setTab] = useState<Tab>("raw");
   const hasCorrected = !!task.corrected;
   const hasPolished = !!task.polished;
+  const setResult = useTasks((s) => s.setResult);
+  const setCorrected = useTasks((s) => s.setCorrected);
 
   // Auto-jump to the most informative tab when new data arrives.
   useEffect(() => {
@@ -39,6 +89,70 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
   }, [hasPolished, hasCorrected]);
 
   const result = task.result;
+
+  // 有 speaker → 默认对话视图;没有 → 时间戳列表
+  const hasSpeakers = (result?.segments ?? []).some((s) => !!s.speaker);
+  const [viewMode, setViewMode] = useState<ViewMode>("timeline");
+  useEffect(() => {
+    setViewMode(hasSpeakers ? "dialog" : "timeline");
+  }, [hasSpeakers]);
+
+  /** 全局重命名说话人 — 所有 raw/corrected segments 中 speaker===oldName 的都替换为 newName,
+      并把改动写回 raw/corrected JSON 持久化。 */
+  const renameSpeaker = async (oldName: string, newName: string) => {
+    if (!result) return;
+    const renameSeg = (s: Segment): Segment =>
+      s.speaker === oldName ? { ...s, speaker: newName } : s;
+
+    // 1. raw segments
+    const newSegs = result.segments.map(renameSeg);
+    setResult(task.id, { ...result, segments: newSegs });
+
+    // 2. corrected segments(若有)
+    if (task.corrected) {
+      const newCorrected = task.corrected.segments.map(renameSeg);
+      setCorrected(task.id, { ...task.corrected, segments: newCorrected });
+    }
+
+    // 3. 持久化到 raw JSON(transcripts/<stem>/<stem>.json)
+    const stem = task.filename.replace(/\.[^.]+$/, "");
+    try {
+      await ipc.librarySaveRaw({
+        stem,
+        audio_filename: task.filename,
+        txt: buildTxt(newSegs, `${task.filename}\nbackend=${result.backend} duration=${result.duration.toFixed(1)}s segments=${newSegs.length}`),
+        srt: buildSrt(newSegs),
+        json: buildJson({ ...result, segments: newSegs }),
+        result: { ...result, segments: newSegs },
+      });
+    } catch (e) {
+      console.warn("rename: save raw failed", e);
+    }
+
+    // 4. 持久化到 corrected JSON(若有)
+    if (task.corrected) {
+      const newCorrSegs = task.corrected.segments.map(renameSeg);
+      try {
+        await ipc.librarySaveCorrected({
+          stem,
+          txt: buildTxt(newCorrSegs),
+          srt: buildSrt(newCorrSegs),
+          json: JSON.stringify({ segments: newCorrSegs.map((s) => ({
+            start: s.start, end: s.end, text: s.text,
+            original_text: s.original_text, speaker: s.speaker,
+          })) }, null, 2),
+          diff: "",
+          model: task.corrected.model,
+          changed: task.corrected.changed,
+          total: task.corrected.total,
+          glossary: task.corrected.glossary,
+        });
+      } catch (e) {
+        console.warn("rename: save corrected failed", e);
+      }
+    }
+  };
+
   if (!result) {
     return <div className="text-sm text-text-mute">（转录尚未完成）</div>;
   }
@@ -69,13 +183,45 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
             );
           })}
         </div>
-        <div className="px-3 text-ui-sm text-fg-mute">
-          {result.backend} · {fmtDuration(result.duration)} · {result.segments.length} 段
+        <div className="px-3 flex items-center gap-3 text-ui-sm text-fg-mute">
+          {hasSpeakers && (
+            <div className="inline-flex border border-border rounded-sm overflow-hidden">
+              <button
+                onClick={() => setViewMode("dialog")}
+                className={clsx(
+                  "px-2 py-0.5 text-xs",
+                  viewMode === "dialog"
+                    ? "bg-accent/20 text-accent"
+                    : "text-fg-mute hover:text-fg",
+                )}
+                title="按说话人合并为对话气泡"
+              >
+                对话
+              </button>
+              <button
+                onClick={() => setViewMode("timeline")}
+                className={clsx(
+                  "px-2 py-0.5 text-xs border-l border-border",
+                  viewMode === "timeline"
+                    ? "bg-accent/20 text-accent"
+                    : "text-fg-mute hover:text-fg",
+                )}
+                title="逐段带时间戳"
+              >
+                时间戳
+              </button>
+            </div>
+          )}
+          <span>
+            {result.backend} · {fmtDuration(result.duration)} · {result.segments.length} 段
+          </span>
         </div>
       </header>
 
       <div className="flex-1 min-h-0 overflow-auto px-6 py-4 bg-editor">
-        {tab === "raw" && <RawSegments segments={result.segments} />}
+        {tab === "raw" && (
+          <RawTabContent task={task} viewMode={viewMode} onRenameSpeaker={renameSpeaker} />
+        )}
         {tab === "corrected" &&
           (hasCorrected ? (
             <CorrectedSegments
@@ -83,6 +229,8 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
               changed={task.corrected!.changed}
               total={task.corrected!.total}
               model={task.corrected!.model}
+              viewMode={viewMode}
+              onRenameSpeaker={renameSpeaker}
             />
           ) : (
             <CorrectionCTA
@@ -126,14 +274,147 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
 // 内容渲染
 // ============================================================================
 
-function RawSegments({ segments }: { segments: Segment[] }) {
+function SpeakerChip({
+  speakers,
+  who,
+  onRename,
+}: {
+  speakers: string[];
+  who?: string;
+  onRename?: (oldName: string, newName: string) => void;
+}) {
+  if (!speakers.length) return null;
+  const clickable = !!(who && onRename);
+  return (
+    <span
+      onClick={
+        clickable
+          ? (e) => {
+              e.stopPropagation();
+              const next = window.prompt(
+                `把 "${who}" 改成什么名字?\n(全局生效:所有标着 ${who} 的段都会一起换)`,
+                who,
+              );
+              if (next && next.trim() && next.trim() !== who) {
+                onRename!(who!, next.trim());
+              }
+            }
+          : undefined
+      }
+      title={clickable ? "点击改名(全局生效)" : undefined}
+      className={clsx(
+        "shrink-0 px-1.5 py-0.5 rounded-sm border text-xs font-medium whitespace-nowrap select-none",
+        who ? speakerChipClass(speakers, who) : "text-fg-mute border-border",
+        clickable && "cursor-pointer hover:brightness-125",
+      )}
+    >
+      {who ?? "?"}
+    </span>
+  );
+}
+
+function RawTabContent({ task, viewMode, onRenameSpeaker }: {
+  task: Task;
+  viewMode: ViewMode;
+  onRenameSpeaker?: (oldName: string, newName: string) => void;
+}) {
+  const segments = task.result!.segments;
+  const speakers = collectSpeakers(segments);
+  const settings = useSettings((s) => s.settings);
+  const setResult = useTasks((s) => s.setResult);
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function rerun() {
+    setError(null);
+    setBusy(true);
+    try {
+      const dr = await ipc.diarize({
+        audio: task.audio,
+        segments,
+        n_speakers: settings.diarization?.n_speakers ?? 0,
+        profiles: settings.diarization?.speakers ?? [],
+      });
+      // 拷一份新数组让 React 知道变了
+      const next = segments.map((s, i) => ({
+        ...s,
+        speaker: dr.segments[i]?.speaker ?? s.speaker,
+      }));
+      setResult(task.id, { ...task.result!, segments: next });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3 pb-2 border-b border-border/60">
+        <div className="text-ui-sm text-fg-mute">
+          {speakers.length > 0
+            ? `识别到 ${speakers.length} 位说话人:` + speakers.join(" · ")
+            : "未运行说话人分离 — 点右侧按钮跑一次"}
+        </div>
+        <button
+          onClick={rerun}
+          disabled={busy}
+          className="btn-ghost flex items-center gap-1.5 text-ui-sm"
+          title="不重新转录,只重新识别说话人"
+        >
+          <Refresh size={12} className={busy ? "animate-spin" : ""} />
+          {busy ? "分人中…" : speakers.length > 0 ? "重新跑分人" : "运行说话人分离"}
+        </button>
+      </div>
+      {error && (
+        <div className="text-ui-sm text-err bg-err/10 border border-err/30 rounded-sm px-3 py-2">
+          {error}
+        </div>
+      )}
+      <RawSegments segments={segments} viewMode={viewMode} onRenameSpeaker={onRenameSpeaker} />
+    </div>
+  );
+}
+
+function RawSegments({ segments, viewMode, onRenameSpeaker }: {
+  segments: Segment[];
+  viewMode: ViewMode;
+  onRenameSpeaker?: (oldName: string, newName: string) => void;
+}) {
+  const speakers = collectSpeakers(segments);
+  const hasSpeakers = speakers.length > 0;
+
+  if (viewMode === "dialog" && hasSpeakers) {
+    const turns = groupBySpeakerTurns(segments);
+    return (
+      <ul className="space-y-3 text-ui leading-relaxed">
+        {turns.map((t, i) => (
+          <li key={i} className="flex gap-3 min-w-0 group">
+            <div className="flex flex-col items-start gap-1 shrink-0">
+              <SpeakerChip speakers={speakers} who={t.speaker} onRename={onRenameSpeaker} />
+              <span className="text-ui-sm text-fg-mute font-mono">
+                {formatTimeShort(t.start)}
+              </span>
+            </div>
+            <div className="flex-1 min-w-0 break-words text-fg">
+              {t.segments.map((s) => s.text).join("")}
+            </div>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  // 时间戳模式
   return (
     <ul className="space-y-1 font-mono text-ui leading-relaxed">
       {segments.map((s, i) => (
-        <li key={i} className="flex gap-3 min-w-0 group">
+        <li key={i} className="flex gap-3 min-w-0 group items-start">
           <span className="text-ui-sm text-fg-mute pt-0.5 whitespace-nowrap shrink-0 select-none w-12 text-right">
             {formatTimeShort(s.start)}
           </span>
+          {hasSpeakers && <SpeakerChip speakers={speakers} who={s.speaker} onRename={onRenameSpeaker} />}
           <span className="flex-1 min-w-0 break-words text-fg">{s.text}</span>
         </li>
       ))}
@@ -146,27 +427,70 @@ function CorrectedSegments({
   changed,
   total,
   model,
+  viewMode,
+  onRenameSpeaker,
 }: {
   segments: Segment[];
   changed: number;
   total: number;
   model: string;
+  viewMode: ViewMode;
+  onRenameSpeaker?: (oldName: string, newName: string) => void;
 }) {
+  const speakers = collectSpeakers(segments);
+  const hasSpeakers = speakers.length > 0;
+
+  const header = (
+    <div className="text-ui-sm text-fg-mute pb-2 border-b border-border/60">
+      模型 <span className="text-fg-dim font-mono">{model}</span> · 改动 {changed}/{total} 段
+      <span className="ml-3 text-ok">绿色</span> 为校对后,
+      <span className="text-err line-through ml-1">删除线</span> 为原文
+    </div>
+  );
+
+  if (viewMode === "dialog" && hasSpeakers) {
+    const turns = groupBySpeakerTurns(segments);
+    return (
+      <div className="space-y-3">
+        {header}
+        <ul className="space-y-3 text-ui leading-relaxed">
+          {turns.map((t, i) => {
+            const anyChanged = t.segments.some(
+              (s) => s.original_text && s.original_text !== s.text,
+            );
+            return (
+              <li key={i} className="flex gap-3 min-w-0">
+                <div className="flex flex-col items-start gap-1 shrink-0">
+                  <SpeakerChip speakers={speakers} who={t.speaker} onRename={onRenameSpeaker} />
+                  <span className="text-ui-sm text-fg-mute font-mono">
+                    {formatTimeShort(t.start)}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0 break-words">
+                  <div className={anyChanged ? "text-ok" : "text-fg"}>
+                    {t.segments.map((s) => s.text).join("")}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
-      <div className="text-ui-sm text-fg-mute pb-2 border-b border-border/60">
-        模型 <span className="text-fg-dim font-mono">{model}</span> · 改动 {changed}/{total} 段
-        <span className="ml-3 text-ok">绿色</span> 为校对后,
-        <span className="text-err line-through ml-1">删除线</span> 为原文
-      </div>
+      {header}
       <ul className="space-y-1 font-mono text-ui leading-relaxed">
         {segments.map((s, i) => {
           const changedSeg = s.original_text && s.original_text !== s.text;
           return (
-            <li key={i} className="flex gap-3 min-w-0">
+            <li key={i} className="flex gap-3 min-w-0 items-start">
               <span className="text-ui-sm text-fg-mute pt-0.5 whitespace-nowrap shrink-0 select-none w-12 text-right">
                 {formatTimeShort(s.start)}
               </span>
+              {hasSpeakers && <SpeakerChip speakers={speakers} who={s.speaker} onRename={onRenameSpeaker} />}
               <div className="flex-1 min-w-0 break-words">
                 {changedSeg && (
                   <div className="text-ui-sm text-err/80 line-through">

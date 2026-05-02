@@ -17,6 +17,7 @@ pub struct Settings {
     pub output_dir: Option<String>,
     pub correction: CorrectionSettings,
     pub polish: PolishSettings,
+    pub diarization: DiarizationSettings,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -53,6 +54,32 @@ pub struct PolishSettings {
     pub advanced: LLMAdvanced,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct DiarizationSettings {
+    pub enabled: bool,
+    pub n_speakers: u32,
+    pub speakers: Vec<SpeakerProfile>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SpeakerProfile {
+    pub name: String,
+    pub embedding: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+}
+
+impl Default for DiarizationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            n_speakers: 0, // 0 = 自动检测(silhouette 扫描 K=2..8)
+            speakers: Vec::new(),
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -63,6 +90,7 @@ impl Default for Settings {
             output_dir: None,
             correction: CorrectionSettings::default(),
             polish: PolishSettings::default(),
+            diarization: DiarizationSettings::default(),
         }
     }
 }
@@ -150,6 +178,14 @@ fn migrate(s: &mut Settings) -> bool {
     }
     if s.correction.batch_size == 20 {
         s.correction.batch_size = 30;
+        changed = true;
+    }
+    // v1.0 → v1.1:n_speakers=2 旧默认 → 0(自动)。仅当用户从未启用且声纹库为空时迁移。
+    if !s.diarization.enabled
+        && s.diarization.n_speakers == 2
+        && s.diarization.speakers.is_empty()
+    {
+        s.diarization.n_speakers = 0;
         changed = true;
     }
     changed

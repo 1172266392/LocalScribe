@@ -119,6 +119,27 @@ export function usePipeline() {
           model_id: settings.model_id,
           language: settings.language,
         });
+
+        // Optional diarization — run after transcribe, before save.
+        const diar = settings.diarization;
+        if (diar?.enabled && result.segments.length > 0) {
+          try {
+            setStage(next.id, "diarizing");
+            const dr = await ipc.diarize({
+              audio: next.audio,
+              segments: result.segments,
+              n_speakers: diar.n_speakers,
+              profiles: diar.speakers,
+            });
+            // Merge speaker labels back into segments by index
+            for (let i = 0; i < result.segments.length && i < dr.segments.length; i++) {
+              result.segments[i].speaker = dr.segments[i].speaker;
+            }
+          } catch (e) {
+            console.warn("diarize failed (continuing without speaker labels)", e);
+          }
+        }
+
         setResult(next.id, result);
         // Auto-persist raw transcription to library (transcripts/<stem>/).
         const stem = next.filename.replace(/\.[^.]+$/, "");

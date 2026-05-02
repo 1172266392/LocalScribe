@@ -47,14 +47,40 @@ fi
 # 2. tauri build (基础 .app,不含资源)
 # =============================================================================
 step "2/4 pnpm tauri build"
-# 卸载已挂载的旧 DMG (打包流程会失败如果存在)
-hdiutil info | grep -E "image-path.*LocalScribe" -B2 | grep "/dev/" | awk '{print $1}' | while read dev; do
-  warn "  卸载旧 DMG: $dev"
-  hdiutil detach "$dev" -force 2>/dev/null || true
+
+# ─── 卸载所有 LocalScribe 相关挂载点 ────────────────────────────────────────
+# 经验:Tauri 的 bundle_dmg.sh 在挂载点冲突时会静默失败,然后 .app 不被注入资源
+# 但 build-app.sh 仍然 exit 0(set -e 没生效,原因不明)。所以这里必须**铁腕清理**:
+#   1. 按卷名 /Volumes/LocalScribe 找挂载点(任何分支版本,如 -1, -2)
+#   2. 按 image-path 含 LocalScribe 的 image 全部 detach
+#   3. 删 Tauri 临时 rw.*.dmg
+warn "  清理任何已挂载的 LocalScribe 卷 / 旧 DMG"
+mount | awk '/\/Volumes\/LocalScribe/ {print $1}' | while read dev; do
+  hdiutil detach "$dev" -force 2>/dev/null && echo "    ✓ detached $dev"
 done
+# hdiutil 列出所有 image,把含 LocalScribe 的 dev node detach
+hdiutil info -plist 2>/dev/null \
+  | python3 -c "
+import sys, plistlib
+try:
+    d = plistlib.loads(sys.stdin.buffer.read())
+    for img in d.get('images', []):
+        path = img.get('image-path', '')
+        if 'LocalScribe' not in path: continue
+        for entity in img.get('system-entities', []):
+            dev = entity.get('dev-entry')
+            if dev: print(dev)
+except Exception:
+    pass
+" | sort -u | while read dev; do
+  hdiutil detach "$dev" -force 2>/dev/null && echo "    ✓ detached image: $dev"
+done
+rm -f "$REPO_ROOT/src-tauri/target/release/bundle/macos/rw."*.dmg 2>/dev/null || true
 rm -f "$REPO_ROOT/src-tauri/target/release/bundle/dmg/rw."*.dmg 2>/dev/null || true
 
-pnpm tauri build
+# Tauri 在 DMG bundle 步骤失败时,前面的 .app 步骤其实成功了,但 pnpm 会以 exit 1 收尾。
+# 我们只需要 .app(自己重打 DMG),所以容忍 tauri 的 DMG 失败,只要 .app 还在就继续。
+pnpm tauri build || warn "  tauri 退出非零(常见原因:DMG bundle 步骤失败,但 .app 通常已生成,继续)"
 
 APP="$REPO_ROOT/src-tauri/target/release/bundle/macos/LocalScribe.app"
 DMG_DIR="$REPO_ROOT/src-tauri/target/release/bundle/dmg"
@@ -62,6 +88,20 @@ DMG_DIR="$REPO_ROOT/src-tauri/target/release/bundle/dmg"
 if [[ ! -d "$APP" ]]; then
   err "tauri build 没产出 .app"; exit 1
 fi
+# 把 Tauri 留下的 rw 临时 dmg 再扫一次清掉(避免后续 hdiutil 再被挂载阻塞)
+hdiutil info -plist 2>/dev/null | python3 -c "
+import sys, plistlib
+d = plistlib.loads(sys.stdin.buffer.read())
+for img in d.get('images', []):
+    if 'LocalScribe' in img.get('image-path',''):
+        for ent in img.get('system-entities', []):
+            dev = ent.get('dev-entry')
+            if dev: print(dev)
+" 2>/dev/null | sort -u | while read dev; do
+  hdiutil detach "$dev" -force 2>/dev/null && echo "    ✓ post-tauri detach $dev"
+done
+rm -f "$REPO_ROOT/src-tauri/target/release/bundle/macos/rw."*.dmg 2>/dev/null || true
+
 ok "  $APP"
 
 # =============================================================================
@@ -103,6 +143,13 @@ print('  ✓ mlx_whisper, silero_vad, openai 全部可 import')
 "
 
 APP_SIZE=$(du -sh "$APP" | cut -f1)
+APP_KB=$(du -s "$APP" | cut -f1)
+# 期望 ~3 GB(Python 1.2 G + 模型 1.5 G + ffmpeg 153 M)。低于 1 GB 说明注入失败,
+# 不能拿这个空壳生成 DMG / 装到 /Applications 里(不然用户会得到 14 MB 不能跑的 .app)
+if [[ $APP_KB -lt 1000000 ]]; then
+  err "  .app 异常小($APP_SIZE),注入步骤一定失败了 — 中止"
+  exit 1
+fi
 ok "  .app 注入完成,总大小 $APP_SIZE"
 
 # 触发 macOS 重新签 quarantine 状态(去掉旧的)
@@ -112,7 +159,7 @@ xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 # 4. 重新生成 .dmg
 # =============================================================================
 step "4/4 重新生成 .dmg"
-DMG_PATH="$DMG_DIR/LocalScribe_1.0.0_aarch64.dmg"
+DMG_PATH="$DMG_DIR/LocalScribe_1.0.1_aarch64.dmg"
 
 # 删掉旧 dmg 让 tauri 重新生成 — 但只跑 dmg 步骤太麻烦,直接 hdiutil 简单做
 rm -f "$DMG_PATH"

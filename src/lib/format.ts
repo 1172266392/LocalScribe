@@ -34,7 +34,8 @@ export function buildTxt(segments: Segment[], header?: string): string {
   for (const s of segments) {
     const t = s.text.trim();
     if (!t) continue;
-    lines.push(`[${fmtTs(s.start)} - ${fmtTs(s.end)}] ${t}`);
+    const spk = s.speaker ? `[${s.speaker}] ` : "";
+    lines.push(`[${fmtTs(s.start)} - ${fmtTs(s.end)}] ${spk}${t}`);
   }
   return lines.join("\n") + "\n";
 }
@@ -47,7 +48,8 @@ export function buildSrt(segments: Segment[]): string {
     if (!t) continue;
     out.push(String(idx));
     out.push(`${fmtTs(s.start, true)} --> ${fmtTs(s.end, true)}`);
-    out.push(t);
+    // SRT 标准里没有正式的 speaker 字段,放在文本前用方括号是惯例
+    out.push(s.speaker ? `[${s.speaker}] ${t}` : t);
     out.push("");
     idx += 1;
   }
@@ -64,9 +66,17 @@ export function buildMd(segments: Segment[], title?: string): string {
     lines.push(`# ${title}`);
     lines.push("");
   }
+  let lastSpeaker: string | undefined;
   for (const s of segments) {
     const t = s.text.trim();
     if (!t) continue;
+    // 说话人切换时插一个 H2 分隔,同人连续段不重复标
+    if (s.speaker && s.speaker !== lastSpeaker) {
+      lines.push("");
+      lines.push(`## ${s.speaker}`);
+      lines.push("");
+      lastSpeaker = s.speaker;
+    }
     lines.push(`<a id="t-${Math.floor(s.start * 1000)}"></a>`);
     lines.push(`**[${fmtTs(s.start)}]** ${t}`);
     lines.push("");

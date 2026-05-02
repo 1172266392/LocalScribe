@@ -5,12 +5,13 @@ import { ipc, type CorrectionMode, type LLMAdvanced } from "../lib/ipc";
 import PrivacyNotice from "./PrivacyNotice";
 
 type Props = { open: boolean; onClose: () => void };
-type Tab = "general" | "model" | "correction" | "about";
+type Tab = "general" | "model" | "correction" | "diarization" | "about";
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "general", label: "常规" },
   { value: "model", label: "模型" },
   { value: "correction", label: "校对" },
+  { value: "diarization", label: "说话人" },
   { value: "about", label: "关于" },
 ];
 
@@ -42,6 +43,7 @@ export default function SettingsDialog({ open, onClose }: Props) {
           {tab === "general" && <GeneralTab />}
           {tab === "model" && <ModelTab />}
           {tab === "correction" && <CorrectionTab />}
+          {tab === "diarization" && <DiarizationTab />}
           {tab === "about" && <AboutTab />}
         </div>
       </div>
@@ -570,11 +572,185 @@ function ParamRow({
   );
 }
 
+function DiarizationTab() {
+  const settings = useSettings((s) => s.settings);
+  const patchDiarization = useSettings((s) => s.patchDiarization);
+  const diar = settings.diarization
+    ?? { enabled: false, n_speakers: 2, speakers: [] };
+
+  const [busy, setBusy] = useState<"none" | "extract">("none");
+  const [error, setError] = useState<string | null>(null);
+  const [pendingName, setPendingName] = useState("");
+
+  async function addSpeaker() {
+    setError(null);
+    try {
+      const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+      const picked = await openDialog({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Audio", extensions: ["m4a", "mp3", "wav", "mp4", "mov", "ogg", "flac", "aac", "opus", "webm"] }],
+      });
+      if (!picked || typeof picked !== "string") return;
+      const name = pendingName.trim() || `说话人${diar.speakers.length + 1}`;
+      setBusy("extract");
+      const { ipc: ipcMod } = await import("../lib/ipc");
+      const { embedding } = await ipcMod.extractVoiceEmbedding(picked);
+      await patchDiarization({
+        speakers: [
+          ...diar.speakers,
+          { name, embedding, created_at: new Date().toISOString() },
+        ],
+      });
+      setPendingName("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy("none");
+    }
+  }
+
+  async function renameSpeaker(idx: number, newName: string) {
+    const next = diar.speakers.map((s, i) => i === idx ? { ...s, name: newName } : s);
+    await patchDiarization({ speakers: next });
+  }
+
+  async function deleteSpeaker(idx: number) {
+    const next = diar.speakers.filter((_, i) => i !== idx);
+    await patchDiarization({ speakers: next });
+  }
+
+  return (
+    <div className="space-y-5 text-ui">
+      <div className="bg-info/5 border border-info/20 rounded-sm p-3 text-ui-sm text-fg-dim leading-relaxed">
+        <strong className="text-fg">说话人分离</strong>:转录完成后,自动用 Resemblyzer 声纹模型 + KMeans
+        把音频切成 N 个说话人,每段标注 <span className="font-mono text-fg">SPEAKER_A/B/...</span>。
+        <br />
+        在下面登记声纹样本(每人一段 ≥ 5 秒纯人声),系统会自动用真实姓名替代泛标签(三修 / 位总 等)。
+      </div>
+
+      <Field label="启用说话人分离" hint="转录完成后自动跑 diarization">
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={diar.enabled}
+            onChange={(e) => patchDiarization({ enabled: e.target.checked })}
+          />
+          {diar.enabled ? "已启用" : "未启用"}
+        </label>
+      </Field>
+
+      <Field
+        label="说话人数量"
+        hint="自动 = silhouette 扫描 K=2-8 自选最优(推荐);也可手动指定 1-8(1=单人跳过聚类)"
+      >
+        <div className="flex gap-1.5 flex-wrap">
+          <button
+            disabled={!diar.enabled}
+            onClick={() => patchDiarization({ n_speakers: 0 })}
+            className={clsx(
+              "px-3 py-1.5 rounded-md text-sm border transition-colors",
+              diar.n_speakers === 0
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-bg-border bg-bg/40 text-text-dim hover:text-text",
+            )}
+          >
+            自动
+          </button>
+          {[1, 2, 3, 4, 5, 6, 8].map((n) => (
+            <button
+              key={n}
+              disabled={!diar.enabled}
+              onClick={() => patchDiarization({ n_speakers: n })}
+              className={clsx(
+                "w-10 py-1.5 rounded-md text-sm border transition-colors",
+                diar.n_speakers === n
+                  ? "border-accent bg-accent/10 text-accent"
+                  : "border-bg-border bg-bg/40 text-text-dim hover:text-text",
+              )}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      </Field>
+
+      <div className="border-t border-bg-border pt-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-sm font-medium text-fg">声纹库</div>
+          <div className="text-ui-sm text-fg-mute">{diar.speakers.length} 人</div>
+        </div>
+
+        {diar.speakers.length === 0 ? (
+          <div className="text-ui-sm text-fg-mute italic py-3">
+            还没有登记的声纹。下方上传音频样本,LocalScribe 会自动为该说话人提取 256 维声纹特征(不存音频本体)。
+          </div>
+        ) : (
+          <ul className="space-y-1.5 mb-3">
+            {diar.speakers.map((spk, idx) => (
+              <li key={idx} className="flex items-center gap-2 bg-bg/40 border border-bg-border rounded-sm px-3 py-2">
+                <input
+                  className="flex-1 bg-transparent border-none outline-none text-fg text-sm"
+                  defaultValue={spk.name}
+                  onBlur={(e) => {
+                    const v = e.target.value.trim();
+                    if (v && v !== spk.name) renameSpeaker(idx, v);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                />
+                <span className="text-ui-sm text-fg-mute">256 dims</span>
+                <button
+                  onClick={() => deleteSpeaker(idx)}
+                  className="text-ui-sm text-err hover:underline"
+                >
+                  删除
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="flex items-center gap-2">
+          <input
+            className="flex-1 px-3 py-1.5 bg-bg/40 border border-bg-border rounded-sm text-sm"
+            placeholder="人名(可选,例:三修)"
+            value={pendingName}
+            onChange={(e) => setPendingName(e.target.value)}
+            disabled={!diar.enabled}
+          />
+          <button
+            onClick={addSpeaker}
+            disabled={!diar.enabled || busy === "extract"}
+            className="btn"
+          >
+            {busy === "extract" ? "提取中…" : "+ 添加声纹样本"}
+          </button>
+        </div>
+
+        {error && (
+          <div className="mt-2 text-ui-sm text-err bg-err/10 border border-err/30 rounded-sm px-3 py-2">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-3 text-ui-sm text-fg-mute leading-relaxed">
+          <strong>用法</strong>:每人录一段 5-30 秒纯人声(可以是这次会议开头的自我介绍片段),
+          上传后命名。转录时若 cosine 相似度 ≥ 0.65 则自动用此姓名,否则保留 <span className="font-mono">SPEAKER_X</span>。
+          <br />
+          <strong>隐私</strong>:声纹是 256 维数字向量,**不可逆推回原始音频**,只存在本地 settings.json 里。
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AboutTab() {
   return (
     <div className="space-y-4 text-ui">
       <div>
-        <div className="text-ui-lg font-medium text-fg">LocalScribe v1.0.0</div>
+        <div className="text-ui-lg font-medium text-fg">LocalScribe v1.0.1</div>
         <div className="text-ui-sm text-fg-mute mt-0.5">离线录音转文字 · MIT License</div>
       </div>
 

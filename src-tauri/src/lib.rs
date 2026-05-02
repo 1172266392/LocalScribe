@@ -129,6 +129,8 @@ pub fn run() {
             commands::environment,
             commands::check_model,
             commands::probe_audio,
+            commands::diarize,
+            commands::extract_voice_embedding,
             commands::transcribe,
             commands::correct_segments,
             commands::correct_pause,

@@ -4,6 +4,7 @@ import type { GlossaryEntry, Segment, TranscribeResult } from "../lib/ipc";
 export type TaskStage =
   | "queued"
   | "transcribing"
+  | "diarizing"
   | "transcribed"
   | "correcting"
   | "correcting_paused"
@@ -66,7 +67,8 @@ export const useTasks = create<TasksStore>((set) => ({
       progress: { current: 0, total: 0 },
       createdAt: Date.now(),
     };
-    set((s) => ({ tasks: [...s.tasks, task], activeId: s.activeId ?? id }));
+    // 新任务放最前面 + 自动选中(用户期望:拖入即看到正在处理的项)
+    set((s) => ({ tasks: [task, ...s.tasks], activeId: id }));
     return id;
   },
 

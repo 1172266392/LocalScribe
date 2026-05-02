@@ -16,6 +16,7 @@ import {
 const STAGE_LABEL: Record<TaskStage, string> = {
   queued: "等待",
   transcribing: "转录",
+  diarizing: "分人",
   transcribed: "转录完成",
   correcting: "校对",
   correcting_paused: "暂停",
@@ -29,6 +30,7 @@ const STAGE_LABEL: Record<TaskStage, string> = {
 const STAGE_COLOR: Record<TaskStage, string> = {
   queued: "text-fg-mute",
   transcribing: "text-accent",
+  diarizing: "text-accent",
   transcribed: "text-fg-dim",
   correcting: "text-warn",
   correcting_paused: "text-warn/70",
@@ -40,7 +42,7 @@ const STAGE_COLOR: Record<TaskStage, string> = {
 };
 
 function StageIcon({ stage, className }: { stage: TaskStage; className?: string }) {
-  if (stage === "transcribing" || stage === "correcting" || stage === "polishing")
+  if (stage === "transcribing" || stage === "diarizing" || stage === "correcting" || stage === "polishing")
     return <Hourglass size={11} className={className} />;
   if (stage === "transcribed" || stage === "corrected" || stage === "polished")
     return <Check size={11} className={className} />;
@@ -54,6 +56,20 @@ function progressPct(t: Task): number {
   return Math.min(100, Math.round((t.progress.current / t.progress.total) * 100));
 }
 
+const RUNNING_STAGES: TaskStage[] = ["transcribing", "diarizing", "correcting", "polishing"];
+function isRunning(t: Task): boolean {
+  return RUNNING_STAGES.includes(t.stage);
+}
+
+/** 排序优先级:跑动中 > 等待 > 已完成 > 失败/取消 */
+function stagePriority(s: TaskStage): number {
+  if (RUNNING_STAGES.includes(s)) return 0;
+  if (s === "queued") return 1;
+  if (s === "correcting_paused") return 1;
+  if (s === "polished" || s === "corrected" || s === "transcribed") return 2;
+  return 3; // error / cancelled
+}
+
 export default function TaskQueue() {
   const tasks = useTasks((s) => s.tasks);
   const activeId = useTasks((s) => s.activeId);
@@ -61,30 +77,53 @@ export default function TaskQueue() {
   const remove = useTasks((s) => s.remove);
   const clearAll = useTasks((s) => s.clearAll);
 
-  if (tasks.length === 0) {
+  // 队列只显示"在跑 / 等待 / 失败"的任务。已完成(transcribed/corrected/polished)
+  // 自动从队列消失 — 它们已经在"历史库"里了,避免双重显示混淆
+  const FINISHED: TaskStage[] = ["polished", "corrected", "transcribed"];
+  const visible = tasks.filter((t) => !FINISHED.includes(t.stage));
+
+  if (visible.length === 0) {
     return (
       <div className="px-3 py-2 text-ui-sm text-fg-mute">
-        还没有任务。从上方拖入或选择文件。
+        {tasks.length > 0
+          ? "全部完成 — 在下方「历史库」查看"
+          : "还没有任务。从上方拖入或选择文件。"}
       </div>
     );
   }
 
+  // 跑动中 → 队列顶部;同优先级里新的在前
+  const sorted = [...visible].sort((a, b) => {
+    const pa = stagePriority(a.stage);
+    const pb = stagePriority(b.stage);
+    if (pa !== pb) return pa - pb;
+    return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+  });
+
   return (
     <div className="text-ui">
-      {tasks.map((t) => {
+      {sorted.map((t) => {
         const pct = progressPct(t);
         const isActive = activeId === t.id;
-        const showProgress =
-          t.stage === "transcribing" || t.stage === "correcting" || t.stage === "polishing";
+        const running = isRunning(t);
+        const showProgress = running;
         return (
           <div
             key={t.id}
             onClick={() => setActive(t.id)}
             className={clsx(
-              "list-item flex-col items-stretch py-1.5",
+              "list-item flex-col items-stretch py-1.5 relative",
               isActive && "list-item-active",
+              running && !isActive && "bg-accent/10",
+              running && "shadow-[inset_3px_0_0_0_theme(colors.accent.DEFAULT)]",
             )}
           >
+            {running && (
+              <span
+                className="absolute top-1.5 right-2 inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse"
+                title="正在处理"
+              />
+            )}
             <div className="flex items-center gap-2 min-w-0">
               <FileText size={12} className="text-fg-mute shrink-0" />
               <span className="flex-1 min-w-0 truncate font-mono text-ui">{t.filename}</span>
