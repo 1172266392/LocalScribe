@@ -14,9 +14,38 @@
 
 ---
 
-## 🎉 v1.0.1 · 计划中
+## 🎉 v1.0.1
 
-(待用户撰写 — 包含的改进可由 v1.0.0 之后的提交点列出)
+(以 git commit `07587f9` v1.0.0 为基线)
+
+**👥 说话人分离(全新功能)**
+
+| 部分 | 说明 |
+|---|---|
+| 引擎 | 新增 `scribe-py/diarizers/` 模块。silero-vad 找说话区间 + 拼接 + 保留时间映射 → Resemblyzer 提声纹 → KMeans 聚类。自动 K 检测(silhouette 扫描 K=2-8 选最优,单人时 silhouette < 0.10 判 1 簇) |
+| 声纹库 | 设置 → 说话人 → 上传声纹样本(每人 5-30 秒纯人声),系统提 256 维 embedding 存进 settings.json · 后续录音 cosine 相似度 ≥ 0.65 自动用真实姓名替代 SPEAKER_A/B |
+| 段落显示 | 每段前彩色 chip(8 路调色板循环)· 默认对话视图(按说话人合并连续段成 turn,< 1.2 秒间隔合并)· 标题栏切换 [对话 \| 时间戳] |
+| 点击 chip 改名 | 全局生效 — 当前任务所有标着 `SPEAKER_A` 的段一起改成"三修",同步写回 raw / corrected JSON,重启不丢 |
+| 重新跑分人按钮 | 原文 tab 顶部:不重新转录,30-60 秒重新跑 diarization(老任务用新算法刷一遍) |
+| 导出带说话人 | txt / srt 段前加 `[说话人]` 前缀;md 按说话人切 H2 章节 |
+| Pipeline 集成 | 设置开启后,转录完自动接力跑 diarize · 任务卡多一个"分人"阶段进度 |
+
+**🐛 Bug 修复**
+
+| Bug | 修复 |
+|---|---|
+| LLM 校对丢失 speaker 字段 | `_correct_batch` 创建新 Segment 时漏了 speaker,校对后段落不再有标签。补上字段透传(同时修 Pass 1 取消 / Pass 2 失败兜底 / 缺批兜底 三条路径) |
+| .app 打包反复装空壳 | Tauri DMG bundle 步骤被旧挂载点阻塞时,build-app.sh 会继续装 14 MB 空壳到 /Applications/。加铁腕清理(扫所有 LocalScribe 挂载点 detach,前后两次)+ 注入后大小硬校验(< 1 GB 直接 abort)+ 容忍 Tauri DMG 步骤失败(我们自己重打 DMG) |
+
+**⚙ 任务队列优化**
+
+| 改进 | 说明 |
+|---|---|
+| 新文件加进来自动选中 | `tasks.add()` 总是把新任务设为 active(之前只在 active 为空时设),拖入即看到正在处理的项 |
+| 跑动中任务置顶 | 新增 stagePriority 排序:跑动 > 等待/暂停 > 完成 > 失败/取消 |
+| 跑动中视觉强化 | 左侧 3px 蓝色 accent 条 + 浅蓝背景 + 右上角脉动小蓝点 |
+| 完成项从队列移走 | transcribed / corrected / polished 三个终态从队列过滤掉,只留在「历史库」显示 |
+| 队列徽章数字 | 只数"在跑 + 等待 + 失败",不算已完成 |
 
 ## 🎉 v1.0.0 · 首个正式版
 
