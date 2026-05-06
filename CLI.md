@@ -2,6 +2,8 @@
 
 LocalScribe 提供稳定的命令行接口供 Claude Code / Hermes 等 AI 编码助手调用。
 
+**版本**: v1.0.2
+
 ## 安装
 
 ```bash
@@ -72,6 +74,30 @@ localscribe pipeline AUDIO --json
 localscribe transcribe AUDIO --json
 localscribe correct  TRANSCRIPT.json --json
 localscribe polish   TRANSCRIPT.json --json    # 接受 raw 或 _corrected.json
+localscribe translate ARTICLE.txt --target-lang zh --json  # 翻译文章
+```
+
+**翻译命令参数**:
+
+| flag | 默认 | 说明 |
+|---|---|---|
+| `--target-lang` | 必填 | 目标语言: `zh`(中文) / `en`(英文) / `ja`(日文) / `ko`(韩文) |
+| `--source-lang` | 自动检测 | 源语言(可选) |
+| `--llm-model` | `deepseek-v4-flash` | 翻译用的模型 |
+| `--glossary` | — | 术语表 JSON 文件路径(保持专有名词一致) |
+
+输出 JSON:
+```json
+{
+  "ok": true,
+  "stage": "translate",
+  "source_file": "/abs/path/article.txt",
+  "output_file": "/abs/path/article_zh.txt",
+  "source_language": "ko",
+  "target_language": "zh",
+  "char_count": 4200,
+  "truncated": false
+}
 ```
 
 ### 工具命令
@@ -84,6 +110,8 @@ localscribe probe-audio AUDIO --json           # ffprobe 元数据
 
 ## 给 AI 工具的典型 prompt 范式
 
+### 完整流程(转录 + 校对 + 排版)
+
 ```
 用 LocalScribe 把这个音频转录并校对成完整文章,返回最终文件路径:
 
@@ -91,6 +119,30 @@ localscribe probe-audio AUDIO --json           # ffprobe 元数据
 
 提取 stages.polish.file 拿到完整文章路径;
 若 stages.polish.truncated 为 true,需重新跑并提高 --max-tokens。
+```
+
+### 翻译文章
+
+```
+把这篇文章翻译成中文:
+
+  $ localscribe translate /path/to/article.txt --target-lang zh --json
+
+提取 output_file 拿到译文路径;
+若 truncated 为 true,需重新跑并提高 --max-tokens。
+```
+
+### 带术语表的翻译
+
+```
+使用校对阶段提取的术语表翻译文章:
+
+  $ localscribe translate /path/to/article.txt \
+      --target-lang en \
+      --glossary /path/to/glossary.json \
+      --json
+
+术语表格式: [{"term": "专有名词", "context": "上下文"}]
 ```
 
 ## 已验证场景

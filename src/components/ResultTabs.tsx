@@ -8,16 +8,17 @@ import type { Segment } from "../lib/ipc";
 import { ipc } from "../lib/ipc";
 import { useSettings } from "../stores/settings-store";
 import { type Task, useTasks } from "../stores/tasks-store";
-import { Article, Check, Copy, Download, FileText, Hourglass, Lock, Pencil, Refresh } from "./Icons";
+import { Article, Check, Copy, Download, FileText, Hourglass, Lock, Pencil, Refresh, Globe } from "./Icons";
 import PinArticleDialog from "./PinArticleDialog";
 
-type Tab = "raw" | "corrected" | "article";
+type Tab = "raw" | "corrected" | "article" | "translated";
 type ViewMode = "timeline" | "dialog";
 
 const TAB_META: Record<Tab, { label: string; icon: React.ReactNode }> = {
   raw: { label: "原文", icon: <FileText size={13} /> },
   corrected: { label: "校对", icon: <Pencil size={13} /> },
   article: { label: "文章", icon: <Article size={13} /> },
+  translated: { label: "译文", icon: <Globe size={13} /> },
 };
 
 // VSCode-friendly palette,8 路循环
@@ -79,14 +80,16 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
   const [tab, setTab] = useState<Tab>("raw");
   const hasCorrected = !!task.corrected;
   const hasPolished = !!task.polished;
+  const hasTranslated = !!task.translated;
   const setResult = useTasks((s) => s.setResult);
   const setCorrected = useTasks((s) => s.setCorrected);
 
   // Auto-jump to the most informative tab when new data arrives.
   useEffect(() => {
-    if (hasPolished) setTab("article");
+    if (hasTranslated) setTab("translated");
+    else if (hasPolished) setTab("article");
     else if (hasCorrected) setTab("corrected");
-  }, [hasPolished, hasCorrected]);
+  }, [hasTranslated, hasPolished, hasCorrected]);
 
   const result = task.result;
 
@@ -162,10 +165,21 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
       {/* VSCode-style editor tab bar */}
       <header className="shrink-0 flex items-center justify-between bg-tabbar border-b border-border">
         <div className="flex items-center">
-          {(["raw", "corrected", "article"] as Tab[]).map((k) => {
+          {(["raw", "corrected", "article", "translated"] as Tab[]).map((k) => {
             const isActive = tab === k;
             const isReady =
-              k === "raw" || (k === "corrected" && hasCorrected) || (k === "article" && hasPolished);
+              k === "raw" ||
+              (k === "corrected" && hasCorrected) ||
+              (k === "article" && hasPolished) ||
+              (k === "translated" && hasTranslated);
+
+            // 判断当前 tab 是否正在处理中
+            const isProcessing =
+              (k === "raw" && (task.stage === "transcribing" || task.stage === "diarizing")) ||
+              (k === "corrected" && (task.stage === "correcting" || task.stage === "correcting_paused")) ||
+              (k === "article" && task.stage === "polishing") ||
+              (k === "translated" && task.stage === "translating");
+
             return (
               <button
                 key={k}
@@ -174,11 +188,13 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
                   "btn-tab",
                   isActive && "btn-tab-active",
                   isActive && "bg-editor",
+                  isProcessing && !isActive && "animate-pulse text-accent",
                 )}
               >
                 {TAB_META[k].icon}
                 <span>{TAB_META[k].label}</span>
                 {isReady && k !== "raw" && <Check size={10} className="text-ok" />}
+                {isProcessing && <Hourglass size={10} className="text-accent animate-spin" />}
               </button>
             );
           })}
@@ -210,6 +226,17 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
               >
                 时间戳
               </button>
+            </div>
+          )}
+          {result.language && (
+            <div className="inline-flex border border-border rounded-sm overflow-hidden">
+              <span className="px-2 py-0.5 text-xs bg-accent/10 text-accent" title="识别语言">
+                {result.language === "zh" && "中文"}
+                {result.language === "en" && "English"}
+                {result.language === "ja" && "日本語"}
+                {result.language === "ko" && "한국어"}
+                {!["zh", "en", "ja", "ko"].includes(result.language) && result.language.toUpperCase()}
+              </span>
             </div>
           )}
           <span>
@@ -256,6 +283,24 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
               onPolish={onPolish}
               onOpenSettings={onOpenSettings}
             />
+          ))}
+        {tab === "translated" &&
+          (hasTranslated ? (
+            <TranslatedView
+              text={task.translated!.text}
+              sourceLanguage={task.translated!.source_language}
+              targetLanguage={task.translated!.target_language}
+              model={task.translated!.model}
+              truncated={task.translated!.truncated}
+              inputChars={task.translated!.input_chars}
+            />
+          ) : (
+            <div className="py-12 px-4 text-center flex flex-col items-center gap-3">
+              <Globe size={28} className="text-fg-mute" />
+              <div className="text-ui text-fg-dim max-w-md leading-relaxed">
+                翻译功能可将文章翻译成其他语言。请先完成文章排版，然后点击底部的"翻译"按钮。
+              </div>
+            </div>
           ))}
       </div>
 
@@ -583,6 +628,80 @@ function ArticleView({
 }
 
 // ============================================================================
+// 译文视图
+// ============================================================================
+
+function TranslatedView({
+  text,
+  sourceLanguage,
+  targetLanguage,
+  model,
+  truncated,
+  inputChars,
+}: {
+  text: string;
+  sourceLanguage: string | null;
+  targetLanguage: string;
+  model: string;
+  truncated?: boolean;
+  inputChars?: number;
+}) {
+  const looksTruncated = truncated || (inputChars && text.length < inputChars * 0.8);
+  const completenessPct = inputChars ? Math.round((text.length / inputChars) * 100) : null;
+
+  const langNames: Record<string, string> = {
+    zh: "中文",
+    en: "English",
+    ja: "日本語",
+    ko: "한국어",
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* 元信息条 */}
+      <div className="flex items-center gap-3 text-ui-sm text-fg-mute">
+        {!looksTruncated && (
+          <span className="px-2 py-0.5 rounded-sm border border-ok/30 bg-ok/10 text-ok text-ui-sm">
+            ✓ 翻译完成
+          </span>
+        )}
+        {/* 语言方向 */}
+        <span className="px-2 py-0.5 rounded-sm border border-accent/30 bg-accent/10 text-accent">
+          {sourceLanguage ? langNames[sourceLanguage] || sourceLanguage.toUpperCase() : "?"} → {langNames[targetLanguage] || targetLanguage.toUpperCase()}
+        </span>
+        <span>模型 <span className="text-fg-dim font-mono">{model}</span></span>
+        <span>·</span>
+        <span>{text.length} 字</span>
+        {inputChars && (
+          <>
+            <span>·</span>
+            <span>原 {inputChars} 字 ({completenessPct}%)</span>
+          </>
+        )}
+      </div>
+
+      {/* 截断警告 */}
+      {looksTruncated && (
+        <div className="bg-warn/5 border border-warn/30 rounded-sm p-3 text-ui-sm text-fg leading-relaxed">
+          <div className="font-medium text-warn mb-1">检测到翻译内容不完整</div>
+          <div className="text-fg-dim">
+            原文 {inputChars ?? "?"} 字仅翻译了 {text.length} 字
+            {completenessPct ? ` (${completenessPct}%)` : ""}。
+            可能原因:LLM 输出 token 数被限制截断。
+          </div>
+          <div className="text-fg-dim mt-1">
+            建议:打开 设置 → 校对 → 高级参数 → <span className="font-mono text-fg">排版 · 最大输出</span>,
+            提高 <span className="font-mono text-fg">max_tokens</span>,然后重新翻译。
+          </div>
+        </div>
+      )}
+
+      <article className="text-fg leading-loose whitespace-pre-wrap text-ui-lg">{text}</article>
+    </div>
+  );
+}
+
+// ============================================================================
 // CTA 占位(没数据时显示触发按钮 / 提示)
 // ============================================================================
 
@@ -762,7 +881,23 @@ function ExportBar({
 }) {
   const isCorrecting = task.stage === "correcting" || task.stage === "correcting_paused";
   const isPolishing = task.stage === "polishing";
+  const isTranslating = task.stage === "translating";
   const [pinOpen, setPinOpen] = useState(false);
+  const [showTranslateMenu, setShowTranslateMenu] = useState(false);
+  const settings = useSettings((s) => s.settings);
+  const hasApiKey = useSettings((s) => s.hasApiKey);
+  const setTranslated = useTasks((s) => s.setTranslated);
+  const setStage = useTasks((s) => s.setStage);
+  const setError = useTasks((s) => s.setError);
+
+  // Close translate menu when clicking outside
+  useEffect(() => {
+    if (!showTranslateMenu) return;
+    const handleClick = () => setShowTranslateMenu(false);
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, [showTranslateMenu]);
+
   async function copy(text: string) {
     await navigator.clipboard.writeText(text);
   }
@@ -773,6 +908,61 @@ function ExportBar({
     });
     if (!path) return;
     await writeTextFile(path, text);
+  }
+
+  async function translateTo(targetLang: string) {
+    console.log("[translateTo] called with targetLang:", targetLang);
+    console.log("[translateTo] task.polished:", task.polished);
+    console.log("[translateTo] task.stage:", task.stage);
+
+    if (!task.polished) {
+      console.warn("[translateTo] No polished text, returning");
+      alert("请先完成文章排版后再翻译");
+      return;
+    }
+    setShowTranslateMenu(false);
+
+    try {
+      console.log("[translateTo] Starting translation...");
+      setStage(task.id, "translating");
+
+      const result = await ipc.translateArticle({
+        text: task.polished.text,
+        source_language: task.result?.language || settings.language || undefined,
+        target_language: targetLang,
+        glossary: task.corrected?.glossary,
+        provider: settings.correction.provider,
+        base_url: settings.correction.base_url,
+        model: settings.translation.model,
+        temperature: settings.translation.advanced.temperature,
+        max_tokens: settings.translation.advanced.max_tokens,
+        top_p: settings.translation.advanced.top_p,
+        frequency_penalty: settings.translation.advanced.frequency_penalty,
+        presence_penalty: settings.translation.advanced.presence_penalty,
+      });
+
+      setTranslated(task.id, {
+        text: result.text,
+        source_language: result.source_language,
+        target_language: result.target_language,
+        model: result.model,
+        truncated: result.truncated,
+        finish_reason: result.finish_reason,
+        input_chars: result.input_chars,
+      });
+    } catch (e) {
+      const errorMsg = `翻译失败: ${String(e)}`;
+      console.error("[translateTo] Error:", e);
+      console.error("[translateTo] Error stack:", e instanceof Error ? e.stack : "no stack");
+
+      // 使用 Tauri 的对话框显示错误
+      import("@tauri-apps/plugin-dialog").then(({ message }) => {
+        message(errorMsg, { title: "翻译错误", kind: "error" });
+      });
+
+      setError(task.id, errorMsg);
+      setStage(task.id, "polished");
+    }
   }
 
   const stem = task.filename.replace(/\.[^.]+$/, "");
@@ -788,10 +978,30 @@ function ExportBar({
   if (tab === "corrected" && !task.corrected) {
     return null;
   }
+  // For translated tab when no translation yet, hide too.
+  if (tab === "translated" && !task.translated) {
+    return null;
+  }
 
   return (
     <div className="shrink-0 flex items-center gap-1 px-3 h-9 border-t border-border/60 bg-tabbar/60">
-      {tab === "article" && task.polished ? (
+      {tab === "translated" && task.translated ? (
+        <>
+          <ActionBtn icon={<Copy size={12} />} label="复制译文" onClick={() => copy(task.translated!.text)} />
+          <ActionBtn icon={<Download size={12} />} label=".txt" onClick={() => download(`${stem}_译文_${task.translated!.target_language}.txt`, task.translated!.text)} />
+          <ActionBtn
+            icon={<Download size={12} />}
+            label=".md"
+            onClick={() => {
+              const langNames: Record<string, string> = { zh: "中文", en: "English", ja: "日本語", ko: "한국어" };
+              const srcLang = task.translated!.source_language ? langNames[task.translated!.source_language] || task.translated!.source_language : "?";
+              const tgtLang = langNames[task.translated!.target_language] || task.translated!.target_language;
+              const md = `# ${stem} (译文)\n\n> _${srcLang} → ${tgtLang} · ${task.translated!.model} · ${task.translated!.text.length} 字_\n\n${task.translated!.text}\n`;
+              download(`${stem}_译文_${task.translated!.target_language}.md`, md);
+            }}
+          />
+        </>
+      ) : tab === "article" && task.polished ? (
         <>
           <ActionBtn icon={<Copy size={12} />} label="复制全文" onClick={() => copy(task.polished!.text)} />
           <ActionBtn icon={<Download size={12} />} label=".txt" onClick={() => download(`${stem}_完整版.txt`, task.polished!.text)} />
@@ -818,6 +1028,60 @@ function ExportBar({
             disabled={isPolishing}
             title="重新跑一遍排版(基于当前校对稿/原文)"
           />
+          <span className="mx-1 h-4 w-px bg-border" />
+          {/* 翻译按钮 */}
+          <div className="relative">
+            <ActionBtn
+              icon={<Globe size={12} />}
+              label={isTranslating ? "翻译中..." : "翻译"}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowTranslateMenu(!showTranslateMenu);
+              }}
+              disabled={isTranslating || !hasApiKey}
+              title={hasApiKey ? "翻译文章到其他语言" : "需要配置 API Key"}
+            />
+            {showTranslateMenu && (
+              <div className="absolute bottom-full left-0 mb-1 bg-sidebar border border-border rounded-sm shadow-lg py-1 min-w-[120px] z-50">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    translateTo("zh");
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent/10 hover:text-accent"
+                >
+                  中文
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    translateTo("en");
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent/10 hover:text-accent"
+                >
+                  English
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    translateTo("ja");
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent/10 hover:text-accent"
+                >
+                  日本語
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    translateTo("ko");
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent/10 hover:text-accent"
+                >
+                  한국어
+                </button>
+              </div>
+            )}
+          </div>
         </>
       ) : (
         <>
@@ -871,7 +1135,7 @@ function ActionBtn({
 }: {
   icon: React.ReactNode;
   label: string;
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
   disabled?: boolean;
   title?: string;
 }) {

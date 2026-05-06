@@ -42,6 +42,16 @@ const DEFAULT_SETTINGS: AppSettings = {
       presence_penalty: 0.0,
     },
   },
+  translation: {
+    model: "deepseek-v4-flash",
+    advanced: {
+      temperature: 0.3,
+      max_tokens: 384000,
+      top_p: 1.0,
+      frequency_penalty: 0.0,
+      presence_penalty: 0.0,
+    },
+  },
 };
 
 type SettingsStore = {
@@ -53,6 +63,7 @@ type SettingsStore = {
   patch: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => Promise<void>;
   patchCorrection: (patch: Partial<AppSettings["correction"]>) => Promise<void>;
   patchPolish: (patch: Partial<AppSettings["polish"]>) => Promise<void>;
+  patchTranslation: (patch: Partial<AppSettings["translation"]>) => Promise<void>;
   patchDiarization: (patch: Partial<AppSettings["diarization"]>) => Promise<void>;
   setApiKey: (provider: string, key: string) => Promise<void>;
   refreshHasApiKey: () => Promise<void>;
@@ -99,6 +110,15 @@ export const useSettings = create<SettingsStore>((set, get) => ({
     const next = {
       ...get().settings,
       polish: { ...get().settings.polish, ...patch },
+    };
+    await ipc.saveSettings(next);
+    set({ settings: next });
+  },
+
+  patchTranslation: async (patch) => {
+    const next = {
+      ...get().settings,
+      translation: { ...get().settings.translation, ...patch },
     };
     await ipc.saveSettings(next);
     set({ settings: next });

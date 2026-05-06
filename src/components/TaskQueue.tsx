@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { useTasks, type Task, type TaskStage } from "../stores/tasks-store";
 import { fmtDuration } from "../lib/format";
-import { cancelCorrection, pauseCorrection, resumeCorrection } from "../hooks/usePipeline";
+import { cancelCorrection, cancelTask, pauseCorrection, resumeCorrection } from "../hooks/usePipeline";
 import {
   Check,
   Close,
@@ -23,6 +23,8 @@ const STAGE_LABEL: Record<TaskStage, string> = {
   corrected: "校对完成",
   polishing: "排版",
   polished: "完成",
+  translating: "翻译",
+  translated: "翻译完成",
   error: "失败",
   cancelled: "取消",
 };
@@ -37,14 +39,16 @@ const STAGE_COLOR: Record<TaskStage, string> = {
   corrected: "text-fg-dim",
   polishing: "text-ok",
   polished: "text-ok",
+  translating: "text-violet-400",
+  translated: "text-fg-dim",
   error: "text-err",
   cancelled: "text-fg-mute",
 };
 
 function StageIcon({ stage, className }: { stage: TaskStage; className?: string }) {
-  if (stage === "transcribing" || stage === "diarizing" || stage === "correcting" || stage === "polishing")
+  if (stage === "transcribing" || stage === "diarizing" || stage === "correcting" || stage === "polishing" || stage === "translating")
     return <Hourglass size={11} className={className} />;
-  if (stage === "transcribed" || stage === "corrected" || stage === "polished")
+  if (stage === "transcribed" || stage === "corrected" || stage === "polished" || stage === "translated")
     return <Check size={11} className={className} />;
   if (stage === "correcting_paused") return <Pause size={11} className={className} />;
   if (stage === "error") return <Warning size={11} className={className} />;
@@ -56,7 +60,7 @@ function progressPct(t: Task): number {
   return Math.min(100, Math.round((t.progress.current / t.progress.total) * 100));
 }
 
-const RUNNING_STAGES: TaskStage[] = ["transcribing", "diarizing", "correcting", "polishing"];
+const RUNNING_STAGES: TaskStage[] = ["transcribing", "diarizing", "correcting", "polishing", "translating"];
 function isRunning(t: Task): boolean {
   return RUNNING_STAGES.includes(t.stage);
 }
@@ -66,7 +70,7 @@ function stagePriority(s: TaskStage): number {
   if (RUNNING_STAGES.includes(s)) return 0;
   if (s === "queued") return 1;
   if (s === "correcting_paused") return 1;
-  if (s === "polished" || s === "corrected" || s === "transcribed") return 2;
+  if (s === "polished" || s === "corrected" || s === "transcribed" || s === "translated") return 2;
   return 3; // error / cancelled
 }
 
@@ -77,9 +81,9 @@ export default function TaskQueue() {
   const remove = useTasks((s) => s.remove);
   const clearAll = useTasks((s) => s.clearAll);
 
-  // 队列只显示"在跑 / 等待 / 失败"的任务。已完成(transcribed/corrected/polished)
+  // 队列只显示"在跑 / 等待 / 失败"的任务。已完成(transcribed/corrected/polished/translated)
   // 自动从队列消失 — 它们已经在"历史库"里了,避免双重显示混淆
-  const FINISHED: TaskStage[] = ["polished", "corrected", "transcribed"];
+  const FINISHED: TaskStage[] = ["polished", "corrected", "transcribed", "translated"];
   const visible = tasks.filter((t) => !FINISHED.includes(t.stage));
 
   if (visible.length === 0) {
@@ -179,6 +183,22 @@ export default function TaskQueue() {
                   <ToolbarBtn icon={<Play size={11} />} label="继续" onClick={() => resumeCorrection(t.id)} className="text-ok hover:text-ok" />
                   <ToolbarBtn icon={<Close size={11} />} label="取消" onClick={() => cancelCorrection(t.id)} className="hover:text-err" />
                 </>
+              )}
+              {(t.stage === "transcribing" || t.stage === "diarizing" || t.stage === "polishing" || t.stage === "translating") && (
+                <ToolbarBtn
+                  icon={<Close size={11} />}
+                  label="取消"
+                  onClick={() => cancelTask(t.id)}
+                  className="hover:text-err"
+                />
+              )}
+              {t.stage === "queued" && (
+                <ToolbarBtn
+                  icon={<Close size={11} />}
+                  label="取消"
+                  onClick={() => cancelTask(t.id)}
+                  className="hover:text-err"
+                />
               )}
               <span className="flex-1" />
               <ToolbarBtn

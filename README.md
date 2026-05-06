@@ -3,7 +3,7 @@
 > 完全离线的录音转文字桌面应用 · 可选 LLM 字级校对与整篇排版 · MIT License
 > **出品方:涌智星河(SwarmPath) · 寒三修** — 隐私友好、本地可控、AI 增强的内容创作工具家族
 
-[![Version](https://img.shields.io/badge/version-1.0.1-success)]()
+[![Version](https://img.shields.io/badge/version-1.0.2-success)]()
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-blue)]()
 [![Tauri](https://img.shields.io/badge/Tauri-2.10-orange)]()
 [![Whisper](https://img.shields.io/badge/Whisper-large--v3--turbo-purple)]()
@@ -13,6 +13,36 @@
 **音频不上传任何服务器**;只有在你显式启用 LLM 校对时,转录后的文字才会发送到你配置的 LLM API。
 
 ---
+
+## 🎉 v1.0.2
+
+**🌐 文章翻译(全新功能)**
+
+| 部分 | 说明 |
+|---|---|
+| 翻译引擎 | 基于排版后的完整文章,支持翻译到中文/英文/日文/韩文 |
+| 独立配置 | 设置 → 校对 → 翻译模型(独立于校对和排版的模型配置) |
+| 高级参数 | 可单独调整翻译的温度、最大输出等参数 |
+| 术语一致性 | 自动使用校对阶段提取的术语表,保持专有名词翻译一致 |
+| 使用方式 | 文章 Tab → 点击底部"翻译"按钮 → 选择目标语言 → 译文 Tab 查看结果 |
+| 导出支持 | 译文可导出为 .txt / .md 格式 |
+
+**⚙️ 配置优化**
+
+| 改进 | 说明 |
+|---|---|
+| 翻译配置独立 | 新增 `TranslationSettings` 结构,翻译模型和参数独立配置 |
+| 设置结构清晰 | 校对、排版、翻译三个功能的配置层级更清晰 |
+| 向后兼容 | 旧版本设置文件自动迁移,添加默认翻译配置 |
+
+**🐛 Bug 修复**
+
+| Bug | 修复 |
+|---|---|
+| 翻译按钮禁用 | 修复 Rust 后端缺少 `translation` 字段导致翻译功能无法使用的问题 |
+| 设置加载失败 | 修复前端加载设置时因缺少 `translation` 配置导致的错误 |
+| 点击翻译目标语言无反应 | Tauri v2 默认期望 camelCase 参数,但前端发的是 snake_case (`target_language` 等),导致 `translate_article` 命令报 `missing required key targetLanguage`。给 `correct_segments` / `polish_article` / `translate_article` 加 `#[tauri::command(rename_all = "snake_case")]`,前后端参数命名对齐 |
+| LLM 高级参数被忽略(隐藏 bug)| 同一原因下,`polish` / `correct` 的 `base_url`、`max_tokens`、`temperature` 等参数因为是 `Option<T>`,Tauri 静默丢弃未匹配的 key,Rust 一直在用代码里的默认值 —— 用户在设置面板里调的 LLM 参数实际从未生效。本次修复后这些参数才真正传到后端 |
 
 ## 🎉 v1.0.1
 
@@ -80,10 +110,10 @@
 
 ### 路线 A · 直接装 .dmg(推荐普通用户)
 
-如果作者/朋友给了你 `LocalScribe_1.0.1_aarch64.dmg`(~1.8 GB):
+如果作者/朋友给了你 `LocalScribe_1.0.2_aarch64.dmg`(~1.8 GB):
 
 ```
-1. 双击 LocalScribe_1.0.1_aarch64.dmg
+1. 双击 LocalScribe_1.0.2_aarch64.dmg
 2. 拖 LocalScribe 图标到 Applications 文件夹
 3. 启动台 / Finder 找到 LocalScribe → 右键打开(首次会问"未验证开发者")
 4. 直接用 — Python / Whisper 模型 / ffmpeg 全部内置,**不用装任何东西**

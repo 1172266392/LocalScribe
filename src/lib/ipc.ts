@@ -113,6 +113,17 @@ export type PolishResponse = {
   input_chars?: number;
 };
 
+export type TranslateResponse = {
+  text: string;
+  source_language: string | null;
+  target_language: string;
+  model: string;
+  char_count: number;
+  finish_reason?: string;
+  truncated?: boolean;
+  input_chars?: number;
+};
+
 export type LLMAdvanced = {
   temperature: number;
   max_tokens: number;
@@ -141,6 +152,11 @@ export type PolishSettings = {
   advanced: LLMAdvanced;
 };
 
+export type TranslationSettings = {
+  model: string;
+  advanced: LLMAdvanced;
+};
+
 export type DiarizationSettings = {
   enabled: boolean;
   /** 期望的说话人数(KMeans 簇数)。1 = 单人(跳过聚类) */
@@ -157,6 +173,7 @@ export type AppSettings = {
   output_dir: string | null;
   correction: CorrectionSettings;
   polish: PolishSettings;
+  translation: TranslationSettings;
   diarization: DiarizationSettings;
 };
 
@@ -200,6 +217,7 @@ export const ipc = {
     top_p?: number;
     frequency_penalty?: number;
     presence_penalty?: number;
+    language?: string;
   }) => invoke<CorrectResponse>("correct_segments", params),
   polishArticle: (params: {
     segments: Segment[];
@@ -213,6 +231,21 @@ export const ipc = {
     presence_penalty?: number;
   }) => invoke<PolishResponse>("polish_article", params),
 
+  translateArticle: (params: {
+    text: string;
+    source_language?: string;
+    target_language: string;
+    glossary?: GlossaryEntry[];
+    provider?: string;
+    base_url?: string;
+    model?: string;
+    temperature?: number;
+    max_tokens?: number;
+    top_p?: number;
+    frequency_penalty?: number;
+    presence_penalty?: number;
+  }) => invoke<TranslateResponse>("translate_article", params),
+
   // correction control
   correctPause: () => invoke<{ status: string }>("correct_pause"),
   correctResume: () => invoke<{ status: string }>("correct_resume"),
@@ -223,6 +256,7 @@ export const ipc = {
   setApiKey: (provider: string, apiKey: string) =>
     invoke<void>("set_api_key", { provider, apiKey }),
   hasApiKey: (provider: string) => invoke<boolean>("has_api_key", { provider }),
+  getApiKey: (provider: string) => invoke<string>("get_api_key", { provider }),
   deleteApiKey: (provider: string) => invoke<void>("delete_api_key", { provider }),
 
   // settings

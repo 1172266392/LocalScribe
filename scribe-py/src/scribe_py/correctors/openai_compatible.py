@@ -43,6 +43,7 @@ class OpenAICompatibleCorrector(Corrector):
         use_glossary: bool = True,
         glossary_text_cap: int = 200_000,
         concurrency: int = 15,
+        language: str | None = None,
     ):
         if not api_key:
             raise ValueError("api_key is required")
@@ -59,7 +60,8 @@ class OpenAICompatibleCorrector(Corrector):
         self.use_glossary = use_glossary
         self.glossary_text_cap = glossary_text_cap
         self.concurrency = max(1, concurrency)
-        self.base_system_prompt = prompts.get(mode)
+        self.language = language
+        self.base_system_prompt = prompts.get(mode, language)
         # Filled in by `correct()` once Pass 1 (glossary) completes.
         self._effective_system_prompt = self.base_system_prompt
         self.last_glossary: list[dict] = []
@@ -78,7 +80,7 @@ class OpenAICompatibleCorrector(Corrector):
             rsp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": prompts.GLOSSARY_EXTRACTION},
+                    {"role": "system", "content": prompts.get_glossary_prompt(self.language)},
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
                 response_format={"type": "json_object"},
@@ -175,7 +177,7 @@ class OpenAICompatibleCorrector(Corrector):
                     "glossary_count": len(glossary),
                 })
 
-        self._effective_system_prompt = prompts.with_glossary(self.base_system_prompt, glossary)
+        self._effective_system_prompt = prompts.with_glossary(self.base_system_prompt, glossary, self.language)
 
         # Pass 2: parallel batched correction
         batches: list[tuple[int, list[Segment]]] = []

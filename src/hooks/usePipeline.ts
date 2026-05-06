@@ -190,6 +190,7 @@ export function usePipeline() {
           top_p: settings.correction.advanced.top_p,
           frequency_penalty: settings.correction.advanced.frequency_penalty,
           presence_penalty: settings.correction.advanced.presence_penalty,
+          language: task.result.language || settings.language || undefined,
         });
         if (cor.cancelled) {
           // 用户取消:仍然保存已完成的部分
@@ -363,6 +364,27 @@ export async function cancelCorrection(_taskId: string): Promise<void> {
   } catch (e) {
     console.warn("cancel failed", e);
   }
+}
+
+export function cancelTask(taskId: string): void {
+  const cur = useTasks.getState().tasks.find((t) => t.id === taskId);
+  if (!cur) return;
+
+  // For stages that support cancellation
+  const cancellableStages = ["transcribing", "diarizing", "correcting", "correcting_paused", "polishing", "translating"];
+
+  if (!cancellableStages.includes(cur.stage)) return;
+
+  // For correction, use the proper cancel API
+  if (cur.stage === "correcting" || cur.stage === "correcting_paused") {
+    cancelCorrection(taskId);
+    return;
+  }
+
+  // For other stages, directly set to cancelled
+  // Note: The backend operation may still continue, but the UI will show it as cancelled
+  useTasks.getState().setStage(taskId, "cancelled");
+  useTasks.getState().setError(taskId, "用户取消");
 }
 
 export type PipelineActions = ReturnType<typeof usePipeline>;

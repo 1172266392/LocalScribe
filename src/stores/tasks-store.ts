@@ -11,6 +11,8 @@ export type TaskStage =
   | "corrected"
   | "polishing"
   | "polished"
+  | "translating"
+  | "translated"
   | "error"
   | "cancelled";
 
@@ -31,6 +33,15 @@ export type Task = {
     finish_reason?: string;
     input_chars?: number;
   };
+  translated?: {
+    text: string;
+    source_language: string | null;
+    target_language: string;
+    model: string;
+    truncated?: boolean;
+    finish_reason?: string;
+    input_chars?: number;
+  };
   createdAt: number;
 };
 
@@ -43,6 +54,7 @@ type TasksStore = {
   setResult: (id: string, result: TranscribeResult) => void;
   setCorrected: (id: string, corrected: Task["corrected"]) => void;
   setPolished: (id: string, polished: Task["polished"]) => void;
+  setTranslated: (id: string, translated: Task["translated"]) => void;
   setError: (id: string, error: string) => void;
   setActive: (id: string | null) => void;
   remove: (id: string) => void;
@@ -91,6 +103,11 @@ export const useTasks = create<TasksStore>((set) => ({
   setPolished: (id, polished) =>
     set((s) => ({
       tasks: s.tasks.map((t) => (t.id === id ? { ...t, polished, stage: "polished" } : t)),
+    })),
+
+  setTranslated: (id, translated) =>
+    set((s) => ({
+      tasks: s.tasks.map((t) => (t.id === id ? { ...t, translated, stage: "translated" } : t)),
     })),
 
   setError: (id, error) =>

@@ -95,7 +95,7 @@ pub async fn transcribe(
     map_err(sidecar.call("transcribe", params).await)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn correct_segments(
     sidecar: State<'_, SidecarLazy>,
     segments: Value,
@@ -145,7 +145,7 @@ pub async fn correct_segments(
     r
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn polish_article(
     sidecar: State<'_, SidecarLazy>,
     segments: Value,
@@ -176,6 +176,52 @@ pub async fn polish_article(
         "presence_penalty": presence_penalty.unwrap_or(0.0),
     });
     map_err(sidecar.call("polish", params).await)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn translate_article(
+    sidecar: State<'_, SidecarLazy>,
+    text: String,
+    source_language: Option<String>,
+    target_language: String,
+    glossary: Option<Value>,
+    provider: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+    temperature: Option<f64>,
+    max_tokens: Option<u32>,
+    top_p: Option<f64>,
+    frequency_penalty: Option<f64>,
+    presence_penalty: Option<f64>,
+) -> Result<Value, String> {
+    eprintln!("[translate_article] Received params:");
+    eprintln!("  text length: {}", text.len());
+    eprintln!("  source_language: {:?}", source_language);
+    eprintln!("  target_language: {}", target_language);
+    eprintln!("  provider: {:?}", provider);
+
+    log_cmd!("translate_article", "target={target_language}");
+    let provider = provider.unwrap_or_else(|| "deepseek".into());
+    let api_key = match secrets::get_api_key(&provider).map_err(|e| format!("{e:#}"))? {
+        Some(k) => k,
+        None => return Err(format!("No API key stored for provider {provider:?}")),
+    };
+
+    let params = json!({
+        "text": text,
+        "source_language": source_language,
+        "target_language": target_language,
+        "glossary": glossary,
+        "api_key": api_key,
+        "base_url": base_url.unwrap_or_else(|| "https://api.deepseek.com".into()),
+        "model": model.unwrap_or_else(|| "deepseek-v4-flash".into()),
+        "temperature": temperature.unwrap_or(0.3),
+        "max_tokens": max_tokens.unwrap_or(384000),
+        "top_p": top_p.unwrap_or(1.0),
+        "frequency_penalty": frequency_penalty.unwrap_or(0.0),
+        "presence_penalty": presence_penalty.unwrap_or(0.0),
+    });
+    map_err(sidecar.call("translate_article", params).await)
 }
 
 // ---- correction control (pause / resume / cancel) ----
@@ -215,6 +261,13 @@ pub fn has_api_key(provider: String) -> Result<bool, String> {
     secrets::get_api_key(&provider)
         .map(|opt| opt.is_some())
         .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub fn get_api_key(provider: String) -> Result<String, String> {
+    secrets::get_api_key(&provider)
+        .map_err(|e| format!("{e:#}"))?
+        .ok_or_else(|| format!("No API key found for provider: {}", provider))
 }
 
 #[tauri::command]

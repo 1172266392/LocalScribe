@@ -17,6 +17,7 @@ pub struct Settings {
     pub output_dir: Option<String>,
     pub correction: CorrectionSettings,
     pub polish: PolishSettings,
+    pub translation: TranslationSettings,
     pub diarization: DiarizationSettings,
 }
 
@@ -50,6 +51,13 @@ pub struct CorrectionSettings {
 #[serde(default)]
 pub struct PolishSettings {
     pub enabled: bool,
+    pub model: String,
+    pub advanced: LLMAdvanced,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct TranslationSettings {
     pub model: String,
     pub advanced: LLMAdvanced,
 }
@@ -90,6 +98,7 @@ impl Default for Settings {
             output_dir: None,
             correction: CorrectionSettings::default(),
             polish: PolishSettings::default(),
+            translation: TranslationSettings::default(),
             diarization: DiarizationSettings::default(),
         }
     }
@@ -123,6 +132,21 @@ impl Default for PolishSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            model: "deepseek-v4-flash".into(),
+            advanced: LLMAdvanced {
+                temperature: 0.3,
+                max_tokens: 384000,
+                top_p: 1.0,
+                frequency_penalty: 0.0,
+                presence_penalty: 0.0,
+            },
+        }
+    }
+}
+
+impl Default for TranslationSettings {
+    fn default() -> Self {
+        Self {
             model: "deepseek-v4-flash".into(),
             advanced: LLMAdvanced {
                 temperature: 0.3,

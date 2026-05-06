@@ -42,6 +42,11 @@ impl SidecarHandle {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
+        // Ensure PATH is inherited so Python can find ffmpeg
+        if let Ok(path) = std::env::var("PATH") {
+            cmd.env("PATH", path);
+        }
+
         let mut child = cmd
             .spawn()
             .with_context(|| format!("failed to spawn sidecar at {}", python.display()))?;

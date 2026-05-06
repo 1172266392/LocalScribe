@@ -180,3 +180,10 @@ export const Download = (p: IconProps) => (
     <path d="M8 2v8M5 7l3 3 3-3M2.5 13.5h11" />
   </Base>
 );
+
+export const Globe = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="8" cy="8" r="6" />
+    <path d="M2 8h12M8 2a10 10 0 010 12M8 2a10 10 0 000 12" />
+  </Base>
+);

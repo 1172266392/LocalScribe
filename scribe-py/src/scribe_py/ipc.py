@@ -37,6 +37,7 @@ from .core.selector import default_model_id, is_apple_silicon, make_transcriber
 from .core.types import Segment, TranscribeOptions
 from .correctors.openai_compatible import OpenAICompatibleCorrector
 from .polishers.article_polisher import ArticlePolisher
+from .translators.article_translator import ArticleTranslator
 
 # stdout writes need to be atomic across threads.
 _emit_lock = threading.Lock()
@@ -193,6 +194,7 @@ def handle_correct(params: dict) -> dict:
         presence_penalty=float(params.get("presence_penalty", 0.0)),
         use_glossary=bool(params.get("use_glossary", True)),
         concurrency=int(params.get("concurrency", 15)),
+        language=params.get("language"),
     )
     out = corrector.correct(
         segments,
@@ -235,6 +237,42 @@ def handle_polish(params: dict) -> dict:
         "truncated": out.get("truncated", False),
         "input_chars": out.get("input_chars", 0),
     }
+
+
+def handle_translate_article(params: dict) -> dict:
+    """Translate article text to target language.
+
+    Args:
+        params: dict with keys:
+            - text: article text to translate
+            - source_language: source language (optional, for reference)
+            - target_language: target language code ("zh", "en", "ja", "ko")
+            - glossary: optional glossary from correction phase
+            - api_key: LLM API key
+            - base_url: API base URL
+            - model: model name
+            - temperature, max_tokens, top_p, frequency_penalty, presence_penalty
+
+    Returns:
+        dict with translated text and metadata
+    """
+    translator = ArticleTranslator(
+        api_key=params["api_key"],
+        base_url=params.get("base_url", "https://api.deepseek.com"),
+        model=params.get("model", "deepseek-v4-flash"),
+        temperature=float(params.get("temperature", 0.3)),
+        max_tokens=int(params.get("max_tokens", 384000)),
+        top_p=float(params.get("top_p", 1.0)),
+        frequency_penalty=float(params.get("frequency_penalty", 0.0)),
+        presence_penalty=float(params.get("presence_penalty", 0.0)),
+    )
+    result = translator.translate(
+        text=params["text"],
+        source_language=params.get("source_language"),
+        target_language=params["target_language"],
+        glossary=params.get("glossary"),
+    )
+    return result
 
 
 # ---- control methods (instant, run on main thread) ----
@@ -308,6 +346,7 @@ HANDLERS: dict[str, Any] = {
     "transcribe": handle_transcribe,
     "correct": handle_correct,
     "polish": handle_polish,
+    "translate_article": handle_translate_article,
     "correct_pause": handle_correct_pause,
     "correct_resume": handle_correct_resume,
     "correct_cancel": handle_correct_cancel,

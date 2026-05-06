@@ -146,7 +146,7 @@ function ModelTab() {
 }
 
 function CorrectionTab() {
-  const { settings, hasApiKey, patchCorrection, patchPolish, setApiKey, refreshHasApiKey } = useSettings();
+  const { settings, hasApiKey, patchCorrection, patchPolish, patchTranslation, setApiKey, refreshHasApiKey } = useSettings();
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
   const [savedHint, setSavedHint] = useState("");
@@ -324,6 +324,16 @@ function CorrectionTab() {
             {settings.polish.enabled ? "已启用" : "未启用"}
           </label>
         </Field>
+
+        <Field label="翻译模型" hint="用于将文章翻译成其他语言(中英日韩)">
+          <input
+            type="text"
+            value={settings.translation.model}
+            onChange={(e) => patchTranslation({ model: e.target.value })}
+            placeholder="deepseek-v4-flash"
+            className="input-text"
+          />
+        </Field>
       </div>
 
       <AdvancedParamsSection />
@@ -386,12 +396,16 @@ function AdvancedParamsSection() {
   const settings = useSettings((s) => s.settings);
   const patchCorrection = useSettings((s) => s.patchCorrection);
   const patchPolish = useSettings((s) => s.patchPolish);
+  const patchTranslation = useSettings((s) => s.patchTranslation);
 
   function setCorrAdv(key: keyof LLMAdvanced, value: number) {
     patchCorrection({ advanced: { ...settings.correction.advanced, [key]: value } });
   }
   function setPolishAdv(key: keyof LLMAdvanced, value: number) {
     patchPolish({ advanced: { ...settings.polish.advanced, [key]: value } });
+  }
+  function setTranslationAdv(key: keyof LLMAdvanced, value: number) {
+    patchTranslation({ advanced: { ...settings.translation.advanced, [key]: value } });
   }
   function resetCorr() {
     patchCorrection({
@@ -404,6 +418,13 @@ function AdvancedParamsSection() {
     patchPolish({
       advanced: {
         temperature: 0.3, max_tokens: 65536, top_p: 1.0, frequency_penalty: 0, presence_penalty: 0,
+      },
+    });
+  }
+  function resetTranslation() {
+    patchTranslation({
+      advanced: {
+        temperature: 0.3, max_tokens: 384000, top_p: 1.0, frequency_penalty: 0, presence_penalty: 0,
       },
     });
   }
@@ -501,6 +522,25 @@ function AdvancedParamsSection() {
               />
             ))}
             <button onClick={resetPolish} className="btn-ghost text-xs">恢复推荐值</button>
+          </fieldset>
+
+          {/* 翻译 LLM 参数 */}
+          <fieldset className="space-y-3 border border-bg-border rounded-md p-3">
+            <legend className="px-2 text-xs text-text-dim">翻译 · LLM 参数</legend>
+            {POLISH_PARAMS.map((p) => (
+              <ParamRow
+                key={`t-${p.key}`}
+                label={p.label}
+                hint={p.hint}
+                min={p.min}
+                max={p.max}
+                step={p.step}
+                value={settings.translation.advanced[p.key]}
+                recommended={p.defaultRecommended}
+                onChange={(v) => setTranslationAdv(p.key, v)}
+              />
+            ))}
+            <button onClick={resetTranslation} className="btn-ghost text-xs">恢复推荐值</button>
           </fieldset>
         </div>
       )}
