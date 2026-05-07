@@ -7,7 +7,7 @@
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-blue)]()
 [![Tauri](https://img.shields.io/badge/Tauri-2.10-orange)]()
 [![Whisper](https://img.shields.io/badge/Whisper-large--v3--turbo-purple)]()
-[![DMG](https://img.shields.io/badge/dmg-1.8%20GB-lightgrey)]()
+[![DMG](https://img.shields.io/badge/dmg-1.9%20GB-lightgrey)]()
 
 录音文件拖进去,几分钟后得到结构化的文字稿、字幕(SRT)、整篇排版文章。
 **音频不上传任何服务器**;只有在你显式启用 LLM 校对时,转录后的文字才会发送到你配置的 LLM API。
@@ -81,7 +81,7 @@
 
 | 类别 | 改进 |
 |---|---|
-| 🚀 **可分发** | 自包含 .dmg(~1.8 GB · 内置 Python 3.12 + 模型 + ffmpeg)— 双击装到 Applications,**用户什么都不用装** |
+| 🚀 **可分发** | 自包含 .dmg(~1.9 GB · 内置 Python 3.12 + 模型 + ffmpeg)— 双击装到 Applications,**用户什么都不用装** |
 | 🎯 **不丢段** | VAD 引导转录:silero-vad 先切说话区间再逐段送 Whisper,解决长 chunk 漏段 bug |
 | ⚡ **更快校对** | 默认并发 5 → **15**,批大小 20 → **30**,综合 4-5x 加速;**急速模式**再快 30% |
 | 📁 **数据规范** | 用户数据搬到 `~/Library/Application Support/LocalScribe/`,卸载/升级不丢 |
@@ -102,7 +102,7 @@
 - **专业**:VSCode 风格界面 · **15 路并发校对**(默认)· 急速模式开关 · 暂停/继续/取消 · 支持 384K token 输出
 - **历史库**:自动持久化所有转录到 `transcripts/<文件名>/`,以后随时载入查看
 - **CLI 友好**:全部功能可通过命令行 + JSON 协议给 AI 编码工具(Claude Code / Hermes)调用
-- **开箱即用**:提供自包含 `.dmg`(~1.8 GB · 内置 Python + 模型 + ffmpeg),双击装到 Applications 即用
+- **开箱即用**:提供自包含 `.dmg`(~1.9 GB · 内置 Python + 模型 + ffmpeg),双击装到 Applications 即用
 
 ---
 
@@ -110,7 +110,7 @@
 
 ### 路线 A · 直接装 .dmg(推荐普通用户)
 
-如果作者/朋友给了你 `LocalScribe_1.0.2_aarch64.dmg`(~1.8 GB):
+如果作者/朋友给了你 `LocalScribe_1.0.2_aarch64.dmg`(~1.9 GB):
 
 ```
 1. 双击 LocalScribe_1.0.2_aarch64.dmg
@@ -151,7 +151,8 @@ dev .app 出在 `src-tauri/target/release/bundle/macos/LocalScribe.app`(依赖�
 ```bash
 ./install.sh                       # 先把 .venv + 模型准备好
 ./build-app.sh                     # 自动:下 python-build-standalone + ffmpeg → 注入 .app → 出 .dmg
-# 产物: src-tauri/target/release/bundle/dmg/LocalScribe_1.0.1_aarch64.dmg (~1.8 GB)
+# 产物: src-tauri/target/release/bundle/dmg/LocalScribe_1.0.2_aarch64.dmg (~1.9 GB)
+# (DMG 文件名版本号由 build-app.sh 自动从 tauri.conf.json 读取,无需手动改脚本)
 ```
 
 `build-app.sh` 做的事:
@@ -272,13 +273,13 @@ pnpm tauri dev
 # 6. 生产构建
 pnpm tauri build
 # 产物:src-tauri/target/release/bundle/macos/LocalScribe.app
-#       src-tauri/target/release/bundle/dmg/LocalScribe_1.0.1_aarch64.dmg
+#       src-tauri/target/release/bundle/dmg/LocalScribe_1.0.2_aarch64.dmg
 ```
 
 ### 注意事项
 
 - `pnpm tauri build` 出的是 **dev 版 .app** — 依赖 `<repo>/.venv/bin/python3` 绝对路径,只能你这台机器运行
-- 想给别人用:跑 `./build-app.sh` 出**自包含 .dmg**(~1.8 GB,内置 Python + 模型 + ffmpeg)
+- 想给别人用:跑 `./build-app.sh` 出**自包含 .dmg**(~1.9 GB,内置 Python + 模型 + ffmpeg)
 
 ---
 
@@ -424,7 +425,7 @@ LLM 输出有 token 限制,超长内容会被截断。我们:
 - [x] CLI + JSON 协议
 - [x] **15 路并发**校对 + 暂停/取消 + 急速模式
 - [x] **VAD 引导转录** — 解决 Whisper 长 chunk 漏段
-- [x] **可分发 .dmg**(~1.8 GB · 内置 Python + 模型 + ffmpeg)— 双击装到 Applications 即用
+- [x] **可分发 .dmg**(~1.9 GB · 内置 Python + 模型 + ffmpeg)— 双击装到 Applications 即用
 - [x] **模型缺失引导页** — 启动时若没找到权重,UI 引导用户放入正确目录
 - [ ] **代码签名 + 公证**(Apple Dev ID · 消除"未验证开发者"提示)
 - [ ] **首启 wizard**(语言 / 模型大小 / 镜像三步引导)

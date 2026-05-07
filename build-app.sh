@@ -159,7 +159,11 @@ xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 # 4. 重新生成 .dmg
 # =============================================================================
 step "4/4 重新生成 .dmg"
-DMG_PATH="$DMG_DIR/LocalScribe_1.0.1_aarch64.dmg"
+APP_VERSION=$(awk -F'"' '/^[[:space:]]*"version"[[:space:]]*:/ {print $4; exit}' "$REPO_ROOT/src-tauri/tauri.conf.json")
+if [[ -z "$APP_VERSION" ]]; then
+  err "无法从 tauri.conf.json 读到版本号"; exit 1
+fi
+DMG_PATH="$DMG_DIR/LocalScribe_${APP_VERSION}_aarch64.dmg"
 
 # 删掉旧 dmg 让 tauri 重新生成 — 但只跑 dmg 步骤太麻烦,直接 hdiutil 简单做
 rm -f "$DMG_PATH"
