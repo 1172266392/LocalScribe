@@ -790,7 +790,7 @@ function AboutTab() {
   return (
     <div className="space-y-4 text-ui">
       <div>
-        <div className="text-ui-lg font-medium text-fg">LocalScribe v1.0.1</div>
+        <div className="text-ui-lg font-medium text-fg">LocalScribe v1.0.3</div>
         <div className="text-ui-sm text-fg-mute mt-0.5">离线录音转文字 · MIT License</div>
       </div>
 

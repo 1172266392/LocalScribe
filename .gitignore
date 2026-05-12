@@ -79,6 +79,17 @@ src-tauri/bundle-staging/
 *.mkv
 *.webm
 
+# 转录 / 校对 / 排版 / 翻译 的输出产物(用户本地导出 / 测试样本)
+# 注:仓库内合法文档都用 .md;若有特殊需求,用 `git add -f` 强制添加
+*.srt
+*.txt
+*.docx
+*.doc
+*.pdf
+*.xlsx
+*.xls
+*.csv
+
 # 备份文件(我们的清理脚本产生的)
 *.bak
 *.bak2

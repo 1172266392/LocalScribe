@@ -3,7 +3,7 @@
 > 完全离线的录音转文字桌面应用 · 可选 LLM 字级校对与整篇排版 · MIT License
 > **出品方:涌智星河(SwarmPath) · 寒三修** — 隐私友好、本地可控、AI 增强的内容创作工具家族
 
-[![Version](https://img.shields.io/badge/version-1.0.2-success)]()
+[![Version](https://img.shields.io/badge/version-1.0.3-success)]()
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-blue)]()
 [![Tauri](https://img.shields.io/badge/Tauri-2.10-orange)]()
 [![Whisper](https://img.shields.io/badge/Whisper-large--v3--turbo-purple)]()
@@ -13,6 +13,42 @@
 **音频不上传任何服务器**;只有在你显式启用 LLM 校对时,转录后的文字才会发送到你配置的 LLM API。
 
 ---
+
+## 🎉 v1.0.3
+
+**🎙️ 分人引擎升级 → Senko + CAM++(全新)**
+
+| 部分 | 说明 |
+|---|---|
+| 引擎替换 | 原 resemblyzer + KMeans → **Senko + CAM++ 中文专用模型**(CoreML 加速,Apple Silicon 原生);旧 `resemblyzer_diarizer.py` 保留作为 fallback |
+| 准确率 | 中文 DER 从经验值 ~20% 降到 **AISHELL-4 基准 ~13%**(CAM++ 中英混合训练,中文专项优化) |
+| 速度 | **96 分钟音频 ~47 秒**(M3 实测) vs 旧版分钟级 |
+| 长音频兼容 | macOS 上 senko 默认的 UMAP+HDBSCAN 在 ≥20 分钟音频会因 libomp 冲突死锁。代码层强制走 spectral clustering,长稿照常跑(单次 N² eigh 略慢但稳定) |
+| 声纹库变更 | 维度从 256d(resemblyzer)→ 192d(CAM++),**用户既有的声纹样本需要重新上传**;不兼容样本会被自动跳过,日志里有提示 |
+| bundled Python 集成 | `bundle-staging/python/` 内已装好 senko + 依赖(coremltools / hdbscan / umap-learn 等),装机即用 |
+
+**💬 文章/译文 对话体渲染(全新)**
+
+| 部分 | 说明 |
+|---|---|
+| 双模 polish | `article_polisher.py` 检测 segments 里 unique speakers:**≤1 人** → 现有流文章模式;**≥2 人** → 走对话 prompt,输出 `**陈总:** ... \n\n**客户:** ...` 格式。同一人连续多段自动合并为一个回合 |
+| 长稿对话分块 | 分块时按 **speaker 边界**优先切,避免把一个人发言切碎在两个块里 |
+| 译文保留对话头 | `article_translator.py` 检测到对话格式时,prompt 命令 LLM "保留所有 `**NAME:**` 标签,只翻译冒号后内容"。英文目标语言下,"陈总" 这种人名也不译,保持回合归属 |
+| UI 自动渲染 | 文章 / 译文 tab 自动识别 `**NAME:**` 头,渲染成和原文 tab 同色 SpeakerChip + 内容,视觉一致 |
+| 改名全链路同步 | 在原文点 chip 改名("SPEAKER_A → 陈总"),**自动同步到**:raw segments + corrected segments + polished 文章正文 + translated 译文正文,并持久化到对应 JSON。即使文章在改名 *之前* 就生成过,**切到文章 tab 时也会按"首次出现顺序"自动对齐替换** |
+| inline 改名输入框 | 替换 `window.prompt()`(Tauri WKWebView 里被禁用),用 inline 输入框,默认 14 字符宽,Enter 提交、Esc 取消 |
+
+**🐛 Bug 修复**
+
+| Bug | 修复 |
+|---|---|
+| UI 版本号显示为旧版本 | `src/App.tsx` 和 `src/components/SettingsDialog.tsx` 里硬编码的版本号没跟版本同步(本次也一起跟到 `v1.0.3`)。后续 bump 版本时记得同步这两处,或者改成从 `package.json` / `Cargo.toml` 动态读取 |
+| 取消任务后新任务卡"等待" | `usePipeline.ts` 的 `runningRef` 用 `useRef` 在 hook 内部,而 `cancelTask` 是模块级独立函数,改不到 hook 内部的 ref。导致点取消后 `runningRef` 永远是 `true`,新拖入的音频永远停在"等待"。把状态提到模块级 `pipelineState`(`running` + `cancelledIds`),`cancelTask` 立即把 `running` 复位、把任务 id 塞进 `cancelledIds`,流水线 async 块每次 await 完检查 `cancelledIds` 决定要不要写回结果。代价:被取消任务的 Python 工作仍会跑完(单进程 sidecar 没有中途打断机制),但 UI 和后续任务都不再被阻塞 |
+| 转录进度反复跳跃(25%→16%→30%→20%) | 同一份 `progress` 状态被两个 writer 用不同单位写:真进度来自 Python VAD 分块(`{current: 3, total: 12}` = 25%),伪进度是前端基于音频时长估算的百分比(`{current: 30, total: 100}` = 30%)。两者把 `total` 字段当不同含义,UI 在两套单位间切换时百分比剧烈跳变;当伪进度因为音频时长 probe 偏差而严重超估时,真进度一来还会暴跌。修法:**统一刻度** —— 真进度写入前先归一化成 `{current: pct, total: 100}`,然后**真假两路都加"进度不许倒退"闸**(新百分比 < 旧的就拒绝)。UI 现在严格单调递增,fake 估错也只是平台期不会回退 |
+| Polish 长稿被截断(原 25081 字仅生成 10210 字 41%) | DeepSeek 等 LLM 有"单次输出 token 数"硬上限(deepseek 8K tokens,即使客户端 `max_tokens=384000`),长稿被服务端截断。`article_polisher.py` 加分块逻辑:按 segment 边界贪心切到 ≤ 4000 字/块,每块独立 polish 再拼接。中文 4000 字 → ~5K tokens 输出,稳进 deepseek 8K 上限内,任意长度都能完整排版 |
+| LLM 偶尔输出繁体字 | DeepSeek 在长上下文里偶尔混出繁体段落。两层防御:**(1) prompt** —— 校对 / 排版 / 翻译的中文 prompt 全部加"必须输出简体中文(GB18030 字符集),严禁繁体字"硬约束;**(2) 代码** —— 用 `zhconv` 库在 LLM 输出后强制把繁体字转简体,纯字典查表(~100KB,无 C 依赖),已装进 bundled Python |
+| 下载文件后找不到 | 两个问题叠加。**(a)** `save()` 的 `defaultPath` 只给了文件名没给目录,save 对话框开在"上次保存位置"用户找不到 → 改成默认到 `~/Downloads/`,并在保存成功后弹对话框告知实际路径。**(b)** `tauri.conf.json` capabilities 里 `fs:default` 不允许写入用户选定的任意路径,writeTextFile 静默失败 → 加 `fs:allow-write-text-file` / `fs:allow-write-file` 等显式权限,并通过 `fs:scope` 限定到 `$HOME/**` / `$DOWNLOAD/**` 等安全范围 |
+| 下载文件名带 `.*` 后缀(`xxx.txt.*`) | save 对话框的 filters 配置 `extensions: ["*"]` 让 macOS 字面把 `.*` 追加成扩展名。改成从输入文件名提取真实扩展(`.txt` / `.md` / `.srt` / `.json`),filter 名也对应("Text" / "Markdown" 等) |
 
 ## 🎉 v1.0.2
 
@@ -110,10 +146,10 @@
 
 ### 路线 A · 直接装 .dmg(推荐普通用户)
 
-如果作者/朋友给了你 `LocalScribe_1.0.2_aarch64.dmg`(~1.9 GB):
+如果作者/朋友给了你 `LocalScribe_1.0.3_aarch64.dmg`(~1.9 GB):
 
 ```
-1. 双击 LocalScribe_1.0.2_aarch64.dmg
+1. 双击 LocalScribe_1.0.3_aarch64.dmg
 2. 拖 LocalScribe 图标到 Applications 文件夹
 3. 启动台 / Finder 找到 LocalScribe → 右键打开(首次会问"未验证开发者")
 4. 直接用 — Python / Whisper 模型 / ffmpeg 全部内置,**不用装任何东西**
@@ -151,7 +187,7 @@ dev .app 出在 `src-tauri/target/release/bundle/macos/LocalScribe.app`(依赖�
 ```bash
 ./install.sh                       # 先把 .venv + 模型准备好
 ./build-app.sh                     # 自动:下 python-build-standalone + ffmpeg → 注入 .app → 出 .dmg
-# 产物: src-tauri/target/release/bundle/dmg/LocalScribe_1.0.2_aarch64.dmg (~1.9 GB)
+# 产物: src-tauri/target/release/bundle/dmg/LocalScribe_1.0.3_aarch64.dmg (~1.9 GB)
 # (DMG 文件名版本号由 build-app.sh 自动从 tauri.conf.json 读取,无需手动改脚本)
 ```
 
@@ -273,7 +309,7 @@ pnpm tauri dev
 # 6. 生产构建
 pnpm tauri build
 # 产物:src-tauri/target/release/bundle/macos/LocalScribe.app
-#       src-tauri/target/release/bundle/dmg/LocalScribe_1.0.2_aarch64.dmg
+#       src-tauri/target/release/bundle/dmg/LocalScribe_1.0.3_aarch64.dmg
 ```
 
 ### 注意事项

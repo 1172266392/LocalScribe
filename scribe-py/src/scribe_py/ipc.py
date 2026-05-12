@@ -227,7 +227,7 @@ def handle_polish(params: dict) -> dict:
         frequency_penalty=float(params.get("frequency_penalty", 0.0)),
         presence_penalty=float(params.get("presence_penalty", 0.0)),
     )
-    out = polisher.polish(segments)
+    out = polisher.polish(segments, on_progress=_make_progress("polish"))
     text = out.get("text", "")
     return {
         "text": text,
@@ -236,6 +236,8 @@ def handle_polish(params: dict) -> dict:
         "finish_reason": out.get("finish_reason", "stop"),
         "truncated": out.get("truncated", False),
         "input_chars": out.get("input_chars", 0),
+        "chunks": out.get("chunks", 1),
+        "mode": out.get("mode", "monologue"),  # "monologue" | "dialogue"
     }
 
 

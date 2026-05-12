@@ -4,14 +4,21 @@ Translates polished articles to target languages while maintaining:
 - Paragraph structure
 - Terminology consistency (via glossary from correction phase)
 - Natural expression in target language
+- **Dialogue speaker headers** like `**陈总:**` — translated content stays intact,
+  speaker name stays as-is (英文目标语言下也保留中文名),冒号后内容才翻译
 """
 from __future__ import annotations
 
 import json
+import re
 
 from openai import OpenAI
 
 from . import prompts
+
+
+# 检测对话体的 speaker 头标记:`**NAME:**` 在行首
+_DIALOGUE_HEADER_RE = re.compile(r"^\*\*([^*\n]+?):\*\*\s*", re.MULTILINE)
 
 
 class ArticleTranslator:
@@ -74,6 +81,17 @@ class ArticleTranslator:
         if glossary:
             system_prompt = prompts.with_glossary(system_prompt, glossary, target_language)
 
+        # 检测是否对话体:含 `**NAME:**` 行首标记
+        is_dialogue = bool(_DIALOGUE_HEADER_RE.search(text))
+        if is_dialogue:
+            dialogue_addendum = (
+                "\n\n# 重要(对话体规则)\n"
+                "输入是对话体,每段以 `**说话人名:**` 开头(双星号包裹,冒号后空格)。\n"
+                "**严格保留所有 `**NAME:**` 标签原样不变**(即使是中文名,目标语言是英文也不要翻译名字),\n"
+                "只翻译冒号后的发言内容。输出格式与输入完全一致:`**NAME:**` 后跟翻译后的内容,段间空行。"
+            )
+            system_prompt = system_prompt + dialogue_addendum
+
         # Prepare user message
         user_message = text
 
@@ -96,6 +114,14 @@ class ArticleTranslator:
             finish_reason = response.choices[0].finish_reason
             truncated = finish_reason == "length"
 
+            # 防御性:目标是中文时,把 LLM 偶尔输出的繁体强制转简体
+            if target_language == "zh":
+                try:
+                    from zhconv import convert
+                    translated_text = convert(translated_text, "zh-hans")
+                except Exception:
+                    pass
+
             return {
                 "text": translated_text,
                 "source_language": source_language,
@@ -105,6 +131,7 @@ class ArticleTranslator:
                 "finish_reason": finish_reason,
                 "truncated": truncated,
                 "input_chars": len(text),
+                "is_dialogue": is_dialogue,
             }
 
         except Exception as e:

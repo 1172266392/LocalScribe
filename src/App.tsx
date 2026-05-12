@@ -249,7 +249,7 @@ function TitleBar({ onOpenSettings }: { onOpenSettings: () => void }) {
       <div className="flex items-center gap-2">
         <Logo size={18} />
         <span className="text-ui font-medium">LocalScribe</span>
-        <span className="text-ui-sm text-fg-mute">v1.0.1</span>
+        <span className="text-ui-sm text-fg-mute">v1.0.3</span>
       </div>
       <button onClick={onOpenSettings} className="btn-ghost h-7 px-2" title="设置">
         <SettingsIcon size={14} />

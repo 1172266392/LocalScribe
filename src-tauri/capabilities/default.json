@@ -7,6 +7,20 @@
     "core:default",
     "dialog:default",
     "fs:default",
+    "fs:allow-write-text-file",
+    "fs:allow-write-file",
+    "fs:allow-read-text-file",
+    "fs:allow-read-file",
+    "fs:allow-exists",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOCUMENT/**" }
+      ]
+    },
     "shell:default"
   ]
 }

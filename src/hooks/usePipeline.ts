@@ -8,6 +8,16 @@ import { buildJson, buildSrt, buildTxt, fmtTs } from "../lib/format";
 import { useSettings } from "../stores/settings-store";
 import { useTasks } from "../stores/tasks-store";
 
+// 模块级流水线状态 —— hook 和外部的 cancelTask() 共享同一份。
+// 为什么不用 useRef:cancelTask 是独立 export 的函数(在 ResultTabs / TaskQueue 里调),
+// 它必须能复位 running 标志,否则点取消后 runningRef 永远是 true,新任务卡在 "等待"。
+const pipelineState = {
+  /** 是否正在跑转录(全局唯一,Python sidecar 单进程串行) */
+  running: false,
+  /** 已被用户取消的 task id 集合 —— 流水线 async 块每 await 完检查,命中就丢结果 */
+  cancelledIds: new Set<string>(),
+};
+
 export function usePipeline() {
   const tasks = useTasks((s) => s.tasks);
   const setStage = useTasks((s) => s.setStage);
@@ -23,25 +33,33 @@ export function usePipeline() {
   const correctingIdRef = useRef<string | null>(null);
 
   // Forward sidecar progress events to whichever task is currently running.
+  // 关键:统一单位到 0-100 百分比。伪进度(下方 useEffect)也是 0-100,这样两者
+  // 不会因为 total 字段含义切换(分块数 vs 100)而导致 UI 反复跳。
+  // 同时不允许进度倒退(防止 fake 估算偏大后被真值暴跌覆盖)。
   useEffect(() => {
     let unsubT: (() => void) | undefined;
     let unsubC: (() => void) | undefined;
     onProgress("transcribe", (data) => {
       const id = transcribingIdRef.current;
       if (!id) return;
-      setProgress(id, {
-        current: data.current ?? 0,
-        total: data.total ?? 0,
-        preview: data.preview,
-      });
+      const cur = data.current ?? 0;
+      const tot = data.total ?? 0;
+      const pct = tot > 0 ? Math.min(100, Math.round((cur / tot) * 100)) : 0;
+      const prev = useTasks.getState().tasks.find((t) => t.id === id)?.progress;
+      const prevPct = prev && prev.total === 100 ? prev.current : 0;
+      if (pct < prevPct) return; // 不倒退
+      setProgress(id, { current: pct, total: 100, preview: data.preview });
     }).then((fn) => (unsubT = fn));
     onProgress("correct", (data) => {
       const id = correctingIdRef.current;
       if (!id) return;
-      setProgress(id, {
-        current: data.current ?? 0,
-        total: data.total ?? 0,
-      });
+      const cur = data.current ?? 0;
+      const tot = data.total ?? 0;
+      const pct = tot > 0 ? Math.min(100, Math.round((cur / tot) * 100)) : 0;
+      const prev = useTasks.getState().tasks.find((t) => t.id === id)?.progress;
+      const prevPct = prev && prev.total === 100 ? prev.current : 0;
+      if (pct < prevPct) return;
+      setProgress(id, { current: pct, total: 100 });
     }).then((fn) => (unsubC = fn));
     return () => {
       unsubT?.();
@@ -101,36 +119,42 @@ export function usePipeline() {
   }, [tasks, setProgress]);
 
   // Auto-run transcription only — LLM stages are now opt-in via buttons.
-  const runningRef = useRef(false);
   useEffect(() => {
-    if (runningRef.current) return;
+    if (pipelineState.running) return;
     const next = tasks.find((t) => t.stage === "queued");
     if (!next) return;
-    runningRef.current = true;
+    pipelineState.running = true;
+    const taskId = next.id;
+
+    // 取消短路:如果任务在 await 期间被 cancelTask 标记,丢弃后续写回。
+    // (Python 那边的活儿还会跑完 —— 单进程 sidecar 没法中途打断 —— 但结果不会污染 UI 和 library。)
+    const isCancelled = () => pipelineState.cancelledIds.has(taskId);
 
     (async () => {
       try {
-        transcribingIdRef.current = next.id;
-        setStage(next.id, "transcribing");
-        setProgress(next.id, { current: 0, total: 1 });
+        transcribingIdRef.current = taskId;
+        setStage(taskId, "transcribing");
+        setProgress(taskId, { current: 0, total: 1 });
         const result = await ipc.transcribe({
           audio: next.audio,
           backend: settings.backend,
           model_id: settings.model_id,
           language: settings.language,
         });
+        if (isCancelled()) return;
 
         // Optional diarization — run after transcribe, before save.
         const diar = settings.diarization;
         if (diar?.enabled && result.segments.length > 0) {
           try {
-            setStage(next.id, "diarizing");
+            setStage(taskId, "diarizing");
             const dr = await ipc.diarize({
               audio: next.audio,
               segments: result.segments,
               n_speakers: diar.n_speakers,
               profiles: diar.speakers,
             });
+            if (isCancelled()) return;
             // Merge speaker labels back into segments by index
             for (let i = 0; i < result.segments.length && i < dr.segments.length; i++) {
               result.segments[i].speaker = dr.segments[i].speaker;
@@ -140,7 +164,7 @@ export function usePipeline() {
           }
         }
 
-        setResult(next.id, result);
+        setResult(taskId, result);
         // Auto-persist raw transcription to library (transcripts/<stem>/).
         const stem = next.filename.replace(/\.[^.]+$/, "");
         try {
@@ -156,10 +180,11 @@ export function usePipeline() {
           console.warn("library_save_raw failed", e);
         }
       } catch (e) {
-        setError(next.id, String(e));
+        if (!isCancelled()) setError(taskId, String(e));
       } finally {
+        pipelineState.cancelledIds.delete(taskId);
         transcribingIdRef.current = null;
-        runningRef.current = false;
+        pipelineState.running = false;
       }
     })();
   }, [tasks, settings, setStage, setProgress, setResult, setError]);
@@ -375,14 +400,19 @@ export function cancelTask(taskId: string): void {
 
   if (!cancellableStages.includes(cur.stage)) return;
 
-  // For correction, use the proper cancel API
+  // For correction, use the proper cancel API (Python sidecar 有真正的取消通道)
   if (cur.stage === "correcting" || cur.stage === "correcting_paused") {
     cancelCorrection(taskId);
     return;
   }
 
-  // For other stages, directly set to cancelled
-  // Note: The backend operation may still continue, but the UI will show it as cancelled
+  // 其它阶段:Python 端没有取消机制,我们做"前端层取消":
+  //   1. 标记 cancelledIds,让流水线 async 块完成后丢结果(不写回 store / library)
+  //   2. 立即把 running 标志归位,新任务能马上进入流水线
+  //      (新任务发的 transcribe 命令会在 Python 端排队,等老任务跑完再处理)
+  //   3. UI 直接显示 cancelled
+  pipelineState.cancelledIds.add(taskId);
+  pipelineState.running = false;
   useTasks.getState().setStage(taskId, "cancelled");
   useTasks.getState().setError(taskId, "用户取消");
 }

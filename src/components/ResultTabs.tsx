@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
+import { useEffect, useRef, useState } from "react";
+import { save, message } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { downloadDir, join } from "@tauri-apps/api/path";
 import clsx from "clsx";
 
 import { buildJson, buildMd, buildSrt, buildTxt, fmtDuration } from "../lib/format";
@@ -83,6 +84,96 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
   const hasTranslated = !!task.translated;
   const setResult = useTasks((s) => s.setResult);
   const setCorrected = useTasks((s) => s.setCorrected);
+  const setPolished = useTasks((s) => s.setPolished);
+  const setTranslatedTop = useTasks((s) => s.setTranslated);
+
+  // ---- 自动同步:文章/译文 里的 speaker 名按"首次出现顺序"对齐到原文/校对里的名 ----
+  // 用途:用户在文章生成 *之后* 才在原文里改名;旧文本没被替换,这里上线时补救。
+  useEffect(() => {
+    const result = task.result;
+    if (!result) return;
+    // 当前(可能已改名)的原文 speaker,按首次出现顺序
+    const rawSpeakers: string[] = [];
+    for (const s of result.segments) {
+      if (s.speaker && !rawSpeakers.includes(s.speaker)) rawSpeakers.push(s.speaker);
+    }
+    if (rawSpeakers.length < 2) return; // 单人或没分人,文章是流文章,无需同步
+
+    // 从文本里抽出对话头(支持 `**X:**` / `**X：**` / `**X**:` 等)
+    const parseHeaders = (txt: string): string[] => {
+      const out: string[] = [];
+      // 行首 `**name:**` 或 `**name：**` 或 `**name**:`
+      const re = /^\*\*([^*\n]+?)(?:\s*[:：]\s*\*\*|\*\*\s*[:：])/gm;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(txt))) {
+        const name = m[1].trim();
+        if (name && !out.includes(name)) out.push(name);
+      }
+      return out;
+    };
+
+    const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const applyMapping = (
+      txt: string,
+      mapping: Record<string, string>,
+    ): string => {
+      let out = txt;
+      for (const [oldN, newN] of Object.entries(mapping)) {
+        const O = escapeRegex(oldN);
+        out = out.replace(new RegExp(`\\*\\*${O}\\s*[:\\uFF1A]\\s*\\*\\*`, "g"), `**${newN}:**`);
+        out = out.replace(new RegExp(`^\\*\\*${O}\\*\\*\\s*[:\\uFF1A]`, "gm"), `**${newN}:**`);
+      }
+      return out;
+    };
+
+    // 同步文章
+    if (task.polished) {
+      const articleSpeakers = parseHeaders(task.polished.text);
+      if (articleSpeakers.length >= 2) {
+        const mapping: Record<string, string> = {};
+        for (let i = 0; i < articleSpeakers.length && i < rawSpeakers.length; i++) {
+          if (articleSpeakers[i] !== rawSpeakers[i]) {
+            mapping[articleSpeakers[i]] = rawSpeakers[i];
+          }
+        }
+        if (Object.keys(mapping).length) {
+          const newText = applyMapping(task.polished.text, mapping);
+          if (newText !== task.polished.text) {
+            console.log("[auto-sync] article speakers updated:", mapping);
+            setPolished(task.id, { ...task.polished, text: newText });
+            const stem = task.filename.replace(/\.[^.]+$/, "");
+            ipc.librarySavePolished({
+              stem,
+              text: newText,
+              model: task.polished.model,
+              source: task.polished.source,
+            }).catch(() => {/* 没保存到 library 是常态,忽略 */});
+          }
+        }
+      }
+    }
+
+    // 同步译文
+    if (task.translated) {
+      const tSpeakers = parseHeaders(task.translated.text);
+      if (tSpeakers.length >= 2) {
+        const mapping: Record<string, string> = {};
+        for (let i = 0; i < tSpeakers.length && i < rawSpeakers.length; i++) {
+          if (tSpeakers[i] !== rawSpeakers[i]) {
+            mapping[tSpeakers[i]] = rawSpeakers[i];
+          }
+        }
+        if (Object.keys(mapping).length) {
+          const newText = applyMapping(task.translated.text, mapping);
+          if (newText !== task.translated.text) {
+            console.log("[auto-sync] translation speakers updated:", mapping);
+            setTranslatedTop(task.id, { ...task.translated, text: newText });
+          }
+        }
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.result, task.polished?.text, task.translated?.text]);
 
   // Auto-jump to the most informative tab when new data arrives.
   useEffect(() => {
@@ -152,6 +243,47 @@ export default function ResultTabs({ task, onCorrect, onPolish, onPipelineFull, 
         });
       } catch (e) {
         console.warn("rename: save corrected failed", e);
+      }
+    }
+
+    // 5. 同步到 polished 文章 / 译文(对话体里的对话头改名)
+    //    兼容 LLM 输出的多种变体格式:
+    //      `**陈总:**`(标准格式,中冒号)
+    //      `**陈总:**`(英冒号)
+    //      `**陈总：**`(中文全角冒号)
+    //      `**陈总**:` / `**陈总**：`(冒号在 ** 外面)
+    //    用严格的"行首 + ** 包裹 + 冒号" 模式,不会误改正文中的偶然重名
+    const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const O = escapeRegex(oldName);
+    const renameInArticle = (txt: string): string => {
+      let out = txt;
+      // a) `**OLD:**` / `**OLD：**`(冒号在 ** 内)
+      out = out.replace(new RegExp(`\\*\\*${O}\\s*[:\\uFF1A]\\s*\\*\\*`, "g"), `**${newName}:**`);
+      // b) `**OLD**:` / `**OLD**：`(冒号在 ** 外)— 只匹配行首,避免误伤正文
+      out = out.replace(new RegExp(`^\\*\\*${O}\\*\\*\\s*[:\\uFF1A]`, "gm"), `**${newName}:**`);
+      return out;
+    };
+
+    if (task.polished) {
+      const newText = renameInArticle(task.polished.text);
+      if (newText !== task.polished.text) {
+        setPolished(task.id, { ...task.polished, text: newText });
+        try {
+          await ipc.librarySavePolished({
+            stem,
+            text: newText,
+            model: task.polished.model,
+            source: task.polished.source,
+          });
+        } catch (e) {
+          console.warn("rename: save polished failed (likely not in library yet)", e);
+        }
+      }
+    }
+    if (task.translated) {
+      const newText = renameInArticle(task.translated.text);
+      if (newText !== task.translated.text) {
+        setTranslatedTop(task.id, { ...task.translated, text: newText });
       }
     }
   };
@@ -328,25 +460,67 @@ function SpeakerChip({
   who?: string;
   onRename?: (oldName: string, newName: string) => void;
 }) {
+  // window.prompt() 在 Tauri WKWebView 里被禁用 → 改用 inline 输入框
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(who ?? "");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
   if (!speakers.length) return null;
   const clickable = !!(who && onRename);
+
+  const commit = () => {
+    const next = draft.trim();
+    if (next && next !== who && onRename && who) {
+      onRename(who, next);
+    }
+    setEditing(false);
+  };
+  const cancel = () => {
+    setDraft(who ?? "");
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          else if (e.key === "Escape") cancel();
+        }}
+        onBlur={commit}
+        onClick={(e) => e.stopPropagation()}
+        className={clsx(
+          "shrink-0 px-1.5 py-0.5 rounded-sm border text-xs font-medium whitespace-nowrap",
+          "bg-bg outline-none",
+          who ? speakerChipClass(speakers, who) : "text-fg-mute border-border",
+        )}
+        style={{ width: `${Math.max(14, draft.length + 2)}ch` }}
+      />
+    );
+  }
+
   return (
     <span
       onClick={
         clickable
           ? (e) => {
               e.stopPropagation();
-              const next = window.prompt(
-                `把 "${who}" 改成什么名字?\n(全局生效:所有标着 ${who} 的段都会一起换)`,
-                who,
-              );
-              if (next && next.trim() && next.trim() !== who) {
-                onRename!(who!, next.trim());
-              }
+              setDraft(who ?? "");
+              setEditing(true);
             }
           : undefined
       }
-      title={clickable ? "点击改名(全局生效)" : undefined}
+      title={clickable ? "点击改名(全局生效:所有标着此说话人的段都会一起换)" : undefined}
       className={clsx(
         "shrink-0 px-1.5 py-0.5 rounded-sm border text-xs font-medium whitespace-nowrap select-none",
         who ? speakerChipClass(speakers, who) : "text-fg-mute border-border",
@@ -622,8 +796,58 @@ function ArticleView({
         </div>
       )}
 
-      <article className="text-fg leading-loose whitespace-pre-wrap text-ui-lg">{text}</article>
+      <DialogueOrArticleContent text={text} />
     </div>
+  );
+}
+
+// ============================================================================
+// 对话体内容渲染:自动识别 **NAME:** 头,渲染成 SpeakerChip + 内容
+// 输入若不含对话头,降级为纯文章渲染(whitespace-pre-wrap)。
+// ============================================================================
+
+function DialogueOrArticleContent({ text }: { text: string }) {
+  // 解析:逐行扫,**NAME:** 标记每个回合起点
+  // 兼容三种格式:
+  //   **陈总:** 内容
+  //   **陈总:**\n内容(标题独占一行,内容下一行)
+  //   普通段落(无标记)
+  const turns: { speaker: string; content: string }[] = [];
+  const headerRe = /^\*\*([^*\n]+?):\*\*\s*/;
+  const lines = text.split(/\r?\n/);
+  let current: { speaker: string; content: string } | null = null;
+  for (const line of lines) {
+    const m = line.match(headerRe);
+    if (m) {
+      if (current) turns.push(current);
+      current = { speaker: m[1].trim(), content: line.slice(m[0].length).trim() };
+    } else if (current) {
+      // 续行附加进当前回合
+      const trimmed = line.trim();
+      if (current.content && trimmed) current.content += "\n" + trimmed;
+      else if (trimmed) current.content = trimmed;
+      else if (current.content) current.content += "\n";  // 保留空行作段间隔
+    }
+  }
+  if (current) turns.push(current);
+
+  // 没找到任何对话头 → 降级
+  if (turns.length === 0) {
+    return <article className="text-fg leading-loose whitespace-pre-wrap text-ui-lg">{text}</article>;
+  }
+
+  const speakers = Array.from(new Set(turns.map((t) => t.speaker)));
+  return (
+    <article className="space-y-4 text-fg leading-loose text-ui-lg">
+      {turns.map((t, i) => (
+        <div key={i} className="flex gap-2 items-start">
+          <div className="pt-0.5">
+            <SpeakerChip speakers={speakers} who={t.speaker} />
+          </div>
+          <div className="flex-1 whitespace-pre-wrap">{t.content}</div>
+        </div>
+      ))}
+    </article>
   );
 }
 
@@ -696,7 +920,7 @@ function TranslatedView({
         </div>
       )}
 
-      <article className="text-fg leading-loose whitespace-pre-wrap text-ui-lg">{text}</article>
+      <DialogueOrArticleContent text={text} />
     </div>
   );
 }
@@ -902,12 +1126,36 @@ function ExportBar({
     await navigator.clipboard.writeText(text);
   }
   async function download(name: string, text: string) {
+    // 默认目录用 ~/Downloads(macOS / 大部分用户最熟悉的位置),
+    // 避免之前 defaultPath 只给文件名时,文件存到"上次保存目录"用户找不到的问题
+    let defaultPath = name;
+    try {
+      const dir = await downloadDir();
+      defaultPath = await join(dir, name);
+    } catch {
+      // ignore — 取不到 Downloads 时回退用纯文件名
+    }
+    // 从文件名提取扩展名(.txt / .md / .srt / .json 等),不能用 "*",macOS 会把它字面追加成 .txt.*
+    const extMatch = name.match(/\.([a-zA-Z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : "txt";
+    const filterName: Record<string, string> = {
+      txt: "Text",
+      md: "Markdown",
+      srt: "SubRip Subtitle",
+      json: "JSON",
+    };
     const path = await save({
-      defaultPath: name,
-      filters: [{ name: "All", extensions: ["*"] }],
+      defaultPath,
+      filters: [{ name: filterName[ext] || ext.toUpperCase(), extensions: [ext] }],
     });
     if (!path) return;
     await writeTextFile(path, text);
+    // 保存成功后告诉用户实际存到了哪里(避免用户找不到)
+    try {
+      await message(`已保存到:\n${path}`, { title: "下载完成", kind: "info" });
+    } catch {
+      // dialog 偶尔加载失败也无所谓,文件已经写好了
+    }
   }
 
   async function translateTo(targetLang: string) {

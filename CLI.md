@@ -2,7 +2,7 @@
 
 LocalScribe 提供稳定的命令行接口供 Claude Code / Hermes 等 AI 编码助手调用。
 
-**版本**: v1.0.2
+**版本**: v1.0.3
 
 ## 安装
 
@@ -144,6 +144,48 @@ localscribe probe-audio AUDIO --json           # ffprobe 元数据
 
 术语表格式: [{"term": "专有名词", "context": "上下文"}]
 ```
+
+## v1.0.3 行为变化(给下游 AI 工具/解析方注意)
+
+CLI 命令接口本身**完全向后兼容**(参数、JSON 字段、exit code 都没动),但内部行为有两处对下游解析有影响:
+
+### 1. 多人音频的 polish 输出现在是**对话格式**
+
+如果转录的音频含 **≥ 2 个不同 speaker**(由分人模块判定),`stages.polish.file` 的 `.txt` 内容会变成对话体:
+
+```
+**SPEAKER_A:** 第一个人说的内容...
+
+**SPEAKER_B:** 第二个人的回应...
+
+**SPEAKER_A:** 又轮回来...
+```
+
+每个回合以 `**NAME:**`(双星号 + 名字 + 冒号 + 双星号 + 空格)开头,回合之间空行。**NAME** 是 `SPEAKER_A` / `SPEAKER_B`(默认)或用户在 UI 改名后的真名(如`陈总`/`客户`)。
+
+**单人音频**(或没启用分人)仍然是流文章模式,**不含任何 `**NAME:**` 标记**,完全和 v1.0.1 一样。下游想稳妥处理两种情况,可以这样判断:
+
+```python
+text = open(polish_file).read()
+import re
+turns = re.findall(r'^\*\*([^*\n]+?):\*\*\s*(.+?)(?=\n\*\*[^*\n]+?:\*\*|\Z)', text, re.MULTILINE | re.DOTALL)
+if turns:
+    # 对话体:turns = [(speaker, content), ...]
+    ...
+else:
+    # 单人/流文章:整段当一个段落用
+    ...
+```
+
+### 2. 中文输出**保证简体**
+
+校对 / 排版 / 翻译三个阶段的 LLM prompt 都加了"必须简体中文"硬约束,并在 Python 端用 `zhconv` 把 LLM 偶尔吐出的繁体字强制转简体。下游不需要再自己跑繁简转换。
+
+### 3. 翻译保留对话头
+
+`localscribe translate ARTICLE.txt --target-lang en` 输入如果是对话体(含 `**NAME:**`),输出**保留所有 `**NAME:**` 标签不译**,只翻译冒号后的内容。这样英文版还是按"谁说什么"组织。
+
+---
 
 ## 已验证场景
 
